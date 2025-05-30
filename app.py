@@ -58,7 +58,6 @@ get_quality_cutoff_scores()
 
 # Select random movies to upgrade
 random_keys = random.choices(list(get_movie_files(get_movies()).keys()), k=NUM_MOVIES_TO_UPGRADE)
-print(random_keys)
 
 # Set data payload for the movies to search
 data = {
