@@ -2,4 +2,5 @@ This is a small python script to look through files in Radarr and try to upgrade
 
 1. clone Repo
 2. pip install -r requirements.txt
-3. add a crontab entry to run the app.py file with python at any interval you like
+3. copy example_env to .env and update the variables inside
+4. add a crontab entry to run the app.py file with python at any interval you like
