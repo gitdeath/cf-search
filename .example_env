@@ -1,3 +1,6 @@
 RADARR_API_KEY="your_api_key_here"
-RADARR_URL="http://192.168.0.100:7878" # no backslash at the end!
+
+# no backslash following Radarr URL
+RADARR_URL="http://192.168.0.100:7878"
+
 NUM_MOVIES_TO_UPGRADE = 5
