@@ -1,7 +1,7 @@
 ---
 services:
   radarr-cf-search:
-    image: ghcr.io/TheHesster/radarr-cf-search:latest
+    image: ghcr.io/thehesster/radarr-cf-search:latest
     container_name: radarr-cf-search
     environment:
       - CRON_SCHEDULE="* * * * *"
