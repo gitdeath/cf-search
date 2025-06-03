@@ -3,14 +3,22 @@ from dotenv import load_dotenv
 import os
 import requests as requests
 import random
+import logging
+
+# Create logger
+logger = logging.getLogger(__name__)
+logging.basicConfig(filename='/config/output.log', encoding='utf-8', format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
 
 # Load .env
 load_dotenv(dotenv_path="/config/.env")
 
 # Set variables
 API_KEY = os.getenv("RADARR_API_KEY")
+logger.debug("Radarr API Key is " + API_KEY)
 RADARR_URL = os.getenv("RADARR_URL")
+logger.debug("Radarr URL is " + RADARR_URL)
 NUM_MOVIES_TO_UPGRADE = int(os.getenv("NUM_MOVIES_TO_UPGRADE"))
+logger.debug("Number of movies to upgrade is " + str(NUM_MOVIES_TO_UPGRADE))
 API_PATH = "/api/v3/"
 MOVIE_ENDPOINT = "movie"
 MOVIEFILE_ENDPOINT = "moviefile/"
@@ -23,6 +31,8 @@ headers = {
 }
 
 quality_to_formats = {}
+movies = {}
+movie_files = {}
 
 def get_quality_cutoff_scores():
     QUALITY_PROFILES_GET_API_CALL = RADARR_URL + API_PATH + QUALITY_PROFILE_ENDPOINT
@@ -32,13 +42,14 @@ def get_quality_cutoff_scores():
 
 # Get all movies and return a dictionary of movies
 def get_movies():
+    logger.info("Querying Movies API")
     MOVIES_GET_API_CALL = RADARR_URL + API_PATH + MOVIE_ENDPOINT
     movies = requests.get(MOVIES_GET_API_CALL, headers=headers).json()
     return movies
 
 # Get all moviefiles for all movies and if moviefile exists and the customFormatScore is less than the wanted score, add it to dictionary and return dictionary
 def get_movie_files(movies):
-    movie_files = {}
+    logger.info("Querying MovieFiles API")
     for movie in movies:
         if movie["movieFileId"] > 0:
             MOVIE_FILE_GET_API_CALL = RADARR_URL + API_PATH + MOVIEFILE_ENDPOINT + str(movie["movieFileId"])
@@ -54,6 +65,7 @@ def get_movie_files(movies):
 
 
 # Get all quality profile ids and their cutoff scores and add to dictionary
+logger.info("Querying Quality Custom Format Cutoff Scores")
 get_quality_cutoff_scores()
 
 # Select random movies to upgrade
@@ -65,5 +77,9 @@ data = {
     "movieIds": random_keys
 }
 # Do the thing
+logger.info("Keys to search are " + str(random_keys))
+for key in random_keys:
+    logger.info("Starting search for " + movie_files[key]["title"])
+    
 SEARCH_MOVIES_POST_API_CALL = RADARR_URL + API_PATH + COMMAND_ENDPOINT
 requests.post(SEARCH_MOVIES_POST_API_CALL, headers=headers, json=data)
