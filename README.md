@@ -1,6 +1,6 @@
 This is a small python script to look through files in Radarr and try to upgrade files if they have not met your custom format score yet.
 
-1. clone Repo
-2. pip install -r requirements.txt
-3. copy example_env to .env and update the variables inside
-4. add a crontab entry to run the app.py file with python at any interval you like
+1. copy example_env to .env and update the variables inside
+2. copy docker compose example
+3. make sure the .env file is in your mapped volume for /config
+4. docker compose up -d
