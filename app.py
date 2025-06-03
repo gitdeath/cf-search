@@ -5,7 +5,7 @@ import requests as requests
 import random
 
 # Load .env
-load_dotenv()
+load_dotenv(dotenv_path="/config/.env")
 
 # Set variables
 API_KEY = os.getenv("RADARR_API_KEY")

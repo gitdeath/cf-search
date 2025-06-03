@@ -1,0 +1,4 @@
+# This is a cronjob template that will be modified by the entrypoint script
+# The schedule is replaced by the environment variable
+
+${CRON_SCHEDULE} /usr/local/bin/python /app/app.py >> /config/cron.log 2>&1
