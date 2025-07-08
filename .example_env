@@ -1,6 +1,13 @@
+PROCESS_RADARR=false
+PROCESS_SONARR=false
+
 RADARR_API_KEY="your_api_key_here"
+SONARR_API_KEY="your_api_key_here"
 
 # no backslash following Radarr URL
 RADARR_URL="http://192.168.0.100:7878"
+# no backslash following Sonarr URL
+SONARR_URL="http://192.168.0.100:8989"
 
 NUM_MOVIES_TO_UPGRADE = 5
+NUM_EPISODES_TO_UPGRADE = 5
