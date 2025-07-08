@@ -1,4 +1,4 @@
-This is a small python script to look through files in Radarr and try to upgrade files if they have not met your custom format score yet.
+This is a small python script to look through files in Radarr and Sonarr and try to upgrade files if they have not met your custom format score yet.
 
 1. copy example_env to .env and update the variables inside
 2. copy docker compose example
