@@ -19,7 +19,7 @@ The script is configured using environment variables. These can be placed in a `
 | --- | --- | --- |
 | `TZ` | Sets the timezone for the container, affecting cron scheduling and log timestamps. | `America/Los_Angeles` |
 | `MAX_UPGRADES` | The maximum total number of items to search for across ALL instances in a single run. Acts as a global cap. Set to `0` or leave unset for no global limit. | `20` |
-| `DRY_RUN` | Set to `true` to run the script in a simulation mode. It will log what would be searched for without actually sending any search commands. | `false` |
+| `DRY_RUN` | Enabled by default for safety. Set to `true` to run in simulation mode. Set to `false` to perform actual searches after verifying your configuration. | `true` |
 | `DELAY_BETWEEN_INSTANCES` | The number of seconds to wait between triggering searches for each instance. This helps to stagger the load on indexers and download clients. | `10` |
 | `RADARR{n}_URL` | URL for the Radarr instance (e.g., `RADARR0_URL`, `RADARR1_URL`). | (none) |
 | `RADARR{n}_API_KEY` | API Key for the corresponding Radarr instance. | (none) |
@@ -78,8 +78,9 @@ You can also define all configuration variables directly in your `docker-compose
           - CRON_SCHEDULE=0 2 * * *
           - TZ=America/Los_Angeles
           # --- Application Settings ---
+          # DRY_RUN is enabled by default for safety. Set to 'false' after verifying your configuration.
+          - DRY_RUN=true
           - MAX_UPGRADES=20
-          - DRY_RUN=false
           # --- Radarr Instance 0 ---
           - RADARR0_URL=http://192.168.0.100:7878
           - RADARR0_API_KEY=your_radarr0_api_key_here

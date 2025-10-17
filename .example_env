@@ -8,9 +8,10 @@ TZ=America/Los_Angeles
 # This acts as a global cap. Leave unset, empty, or set to 0 for no global limit.
 MAX_UPGRADES=20
 
-# Set to "true" to run the script in a simulation mode. It will log what would be
-# searched for without actually sending any search commands to Radarr or Sonarr.
-DRY_RUN=false
+# DRY_RUN is enabled by default for safety. This runs the script in a simulation mode.
+# It will log what would be searched for without actually sending any search commands.
+# Set to "false" after verifying your configuration is working as expected.
+DRY_RUN=true
 
 # The number of seconds to wait between triggering searches for each instance.
 # This helps to stagger the load on indexers and download clients.
