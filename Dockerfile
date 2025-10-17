@@ -6,17 +6,19 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-COPY . /app
-
+# Copy and install dependencies first. This layer is cached and only re-run
+# when requirements.txt changes, speeding up subsequent builds.
+COPY requirements.txt .
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY cronjob.template /etc/cron.d/my-cron-job
-
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Copy the application source code and supporting scripts.
+COPY app.py .
+COPY .example_env .
+COPY cronjob.template .
+COPY entrypoint.sh .
+RUN chmod +x ./entrypoint.sh
 
 RUN mkdir /config
-RUN touch /config/cron.log
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["./entrypoint.sh"]

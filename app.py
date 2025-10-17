@@ -1,170 +1,330 @@
-from requests.auth import HTTPBasicAuth
-from dotenv import load_dotenv
-import os
-import requests as requests
-import random
 import logging
+import os
+import time
+import random
+import sys
+
+import requests
+from dotenv import load_dotenv
 
 # Create logger
 logger = logging.getLogger(__name__)
-logging.basicConfig(filename='/config/output.log', encoding='utf-8', format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
+logger.setLevel(logging.INFO)
+
+# Create handlers
+stream_handler = logging.StreamHandler(sys.stdout)
+file_handler = logging.FileHandler('/config/output.log')
+
+# Create formatters and add it to handlers
+log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
+stream_handler.setFormatter(log_format)
+file_handler.setFormatter(log_format)
+
+# Add handlers to the logger
+logger.addHandler(stream_handler)
+logger.addHandler(file_handler)
 
 # Load .env
 load_dotenv(dotenv_path="/config/.env")
 
-# Set radarr variables
-process_radarr_str = os.getenv("PROCESS_RADARR")
-PROCESS_RADARR = process_radarr_str.lower() == "true" if process_radarr_str else False
-RADARR_API_KEY = os.getenv("RADARR_API_KEY")
-logger.debug("Radarr API Key is " + RADARR_API_KEY)
-RADARR_URL = os.getenv("RADARR_URL")
-logger.debug("Radarr URL is " + RADARR_URL)
-NUM_MOVIES_TO_UPGRADE = int(os.getenv("NUM_MOVIES_TO_UPGRADE"))
-logger.debug("Number of movies to upgrade is " + str(NUM_MOVIES_TO_UPGRADE))
-MOVIE_ENDPOINT = "movie"
-MOVIEFILE_ENDPOINT = "moviefile/"
+class ArrService:
+    """A generic service for interacting with Radarr or Sonarr APIs."""
+    def __init__(self, url, api_key):
+        self.url = url.rstrip('/')
+        self.api_key = api_key
+        self.session = requests.Session()
+        self.session.headers.update({'X-Api-Key': self.api_key})
 
-# Set sonarr varaibles
-process_sonarr_str = os.getenv("PROCESS_SONARR")
-PROCESS_SONARR = process_sonarr_str.lower() == "true" if process_sonarr_str else False
-SONARR_API_KEY = os.getenv("SONARR_API_KEY")
-logger.debug("Sonarr API Key is " + SONARR_API_KEY)
-SONARR_URL = os.getenv("SONARR_URL")
-logger.debug("Sonarr URL is " + SONARR_URL)
-NUM_EPISODES_TO_UPGRADE = int(os.getenv("NUM_EPISODES_TO_UPGRADE"))
-logger.debug("Number of episodes to upgrade is " + str(NUM_EPISODES_TO_UPGRADE))
-SERIES_ENDPOINT = "series"
-EPISODEFILE_ENDPOINT = "episodefile"
-EPISODE_ENDPOINT = "episode"
+    def _get(self, endpoint, params=None):
+        """Performs a GET request to the API."""
+        try:
+            response = self.session.get(f"{self.url}/api/v3/{endpoint}", params=params)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API GET request to {self.url}/api/v3/{endpoint} failed: {e}")
+            return None
 
-# Set shared variables
-API_PATH = "/api/v3/"
-QUALITY_PROFILE_ENDPOINT = "qualityprofile"
-COMMAND_ENDPOINT = "command"
+    def _post(self, endpoint, json_data):
+        """Performs a POST request to the API."""
+        try:
+            response = self.session.post(f"{self.url}/api/v3/{endpoint}", json=json_data)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API POST request to {self.url}/api/v3/{endpoint} failed: {e}")
+            return None
 
-if PROCESS_RADARR:
-    # Set Authorization radarr headers for API calls
-    radarr_headers = {
-        'Authorization': RADARR_API_KEY,
-    }
+    def get_quality_profile_scores(self):
+        """Fetches quality profiles and returns a map of ID to cutoff score."""
+        profiles = self._get("qualityprofile")
+        if profiles is None:
+            return {}
+        return {profile["id"]: profile["cutoffFormatScore"] for profile in profiles}
 
-    quality_to_formats = {}
-    movies = {}
-    movie_files = {}
+    def trigger_search(self, command_name, item_ids_key, item_ids, dry_run=False):
+        """Triggers a search command for a list of item IDs."""
+        if not item_ids:
+            logger.info("No items to search for.")
+            return
 
-    def get_radarr_quality_cutoff_scores():
-        QUALITY_PROFILES_GET_API_CALL = RADARR_URL + API_PATH + QUALITY_PROFILE_ENDPOINT
-        quality_profiles = requests.get(QUALITY_PROFILES_GET_API_CALL, headers=radarr_headers).json()
-        for quality in quality_profiles:
-            quality_to_formats.update({quality["id"]: quality["cutoffFormatScore"]})
+        payload = {
+            "name": command_name,
+            item_ids_key: item_ids
+        }
 
-    # Get all movies and return a dictionary of movies
-    def get_movies():
-        logger.info("Querying Movies API")
-        MOVIES_GET_API_CALL = RADARR_URL + API_PATH + MOVIE_ENDPOINT
-        movies = requests.get(MOVIES_GET_API_CALL, headers=radarr_headers).json()
-        return movies
+        if dry_run:
+            logger.info(f"[DRY RUN] Would trigger search for {len(item_ids)} items.")
+            logger.debug(f"[DRY RUN] Payload: {payload}")
+            return
 
-    # Get all moviefiles for all movies and if moviefile exists and the customFormatScore is less than the wanted score, add it to dictionary and return dictionary
-    def get_movie_files(movies):
-        logger.info("Querying MovieFiles API")
-        for movie in movies:
-            monitored_str = str(movie["monitored"])
-            is_monitored = monitored_str.lower() == "true" if monitored_str else False
-            if movie["movieFileId"] > 0 and is_monitored:
-                MOVIE_FILE_GET_API_CALL = RADARR_URL + API_PATH + MOVIEFILE_ENDPOINT + str(movie["movieFileId"])
-                movie_file = requests.get(MOVIE_FILE_GET_API_CALL, headers=radarr_headers).json()
-                movie_quality_profile_id = movie["qualityProfileId"]
-                # Build dictionary of movie files needing upgrades
-                if movie_file["customFormatScore"] < quality_to_formats[movie_quality_profile_id]:
-                    movie_files[movie["id"]] = {}
-                    movie_files[movie["id"]]["title"] = movie["title"]
-                    movie_files[movie["id"]]["customFormatScore"] = movie_file["customFormatScore"]
-                    movie_files[movie["id"]]["wantedCustomFormatScore"] = quality_to_formats[movie_quality_profile_id]
-        return movie_files
+        logger.info(f"Triggering search for {len(item_ids)} items...")
+        self._post("command", payload)
+        logger.info("Search command sent successfully.")
 
+def get_radarr_upgradeables(config):
+    """Finds all upgradeable movies for a single Radarr instance."""
+    url = config['url']
+    logger.info(f"--- Processing Radarr instance: {url} ---")
+    service = ArrService(url, config['api_key'])
+    upgradeable_items = []
 
-    # Get all quality profile ids and their cutoff scores and add to dictionary
-    logger.info("Querying Radarr Quality Custom Format Cutoff Scores")
-    get_radarr_quality_cutoff_scores()
+    quality_scores = service.get_quality_profile_scores()
+    if not quality_scores:
+        logger.error("Could not fetch quality profiles. Aborting for this instance.")
+        return service, upgradeable_items
 
-    # Select random movies to upgrade
-    random_keys = list(set(random.choices(list(get_movie_files(get_movies()).keys()), k=NUM_MOVIES_TO_UPGRADE)))
+    all_movies = service._get("movie")
+    if all_movies is None:
+        logger.error("Could not fetch movies. Aborting for this instance.")
+        return service, upgradeable_items
 
-    # Set data payload for the movies to search
-    data = {
-        "name": "MoviesSearch",
-        "movieIds": random_keys
-    }
-    # Do the thing
-    logger.info("Keys to search are " + str(random_keys))
-    for key in random_keys:
-        logger.info("Starting search for " + movie_files[key]["title"])
+    for movie in all_movies:
+        if movie.get("monitored") and movie.get("hasFile"):
+            movie_file = movie.get("movieFile", {})
+            current_score = movie_file.get("customFormatScore", 0)
+            cutoff_score = quality_scores.get(movie["qualityProfileId"])
+
+            if cutoff_score is not None and current_score < cutoff_score:
+                upgradeable_items.append({
+                    "id": movie["id"],
+                    "title": movie["title"],
+                    "type": "movie"
+                })
+
+    logger.info(f"Found {len(upgradeable_items)} movies that can be upgraded.")
+    return service, upgradeable_items
+
+def get_sonarr_upgradeables(config):
+    """Finds all upgradeable episodes for a single Sonarr instance."""
+    url = config['url']
+    logger.info(f"--- Processing Sonarr instance: {url} ---")
+    service = ArrService(url, config['api_key'])
+    upgradeable_items = []
+
+    quality_scores = service.get_quality_profile_scores()
+    if not quality_scores:
+        logger.error("Could not fetch quality profiles. Aborting for this instance.")
+        return service, upgradeable_items
+
+    all_series = service._get("series")
+    if all_series is None:
+        logger.error("Could not fetch series. Aborting for this instance.")
+        return service, upgradeable_items
+
+    for series in all_series:
+        if not series.get("monitored") or series.get("statistics", {}).get("episodeFileCount", 0) == 0:
+            continue
+
+        cutoff_score = quality_scores.get(series["qualityProfileId"])
+        if cutoff_score is None:
+            continue
+
+        # Fetch all episodes and all episode files for the series in two efficient calls
+        all_episodes = service._get("episode", params={"seriesId": series["id"]})
+        all_episode_files = service._get("episodefile", params={"seriesId": series["id"]})
+
+        if not all_episodes or not all_episode_files:
+            continue
+
+        # Create a map of episodeFileId to episode details for quick lookup
+        episode_map = {ep["episodeFileId"]: ep for ep in all_episodes if ep.get("episodeFileId")}
+
+        for ep_file in all_episode_files:
+            current_score = ep_file.get("customFormatScore", 0)
+            if current_score < cutoff_score:
+                # Look up the episode details from our map instead of a new API call
+                episode = episode_map.get(ep_file["id"])
+                if episode and episode.get("monitored"):
+                    title = f"{series['title']} - S{episode['seasonNumber']:02d}E{episode['episodeNumber']:02d} - {episode['title']}"
+                    upgradeable_items.append({
+                        "id": episode["id"],
+                        "title": title,
+                        "type": "episode",
+                    })
+
+    logger.info(f"Found {len(upgradeable_items)} episodes that can be upgraded.")
+    return service, upgradeable_items
+
+def load_configs(service_name):
+    """Loads all configurations for a given service (e.g., 'RADARR', 'SONARR')."""
+    configs = []
+    i = 0
+    while True:
+        url = os.getenv(f"{service_name}{i}_URL")
+        api_key = os.getenv(f"{service_name}{i}_API_KEY")
+        num_to_upgrade_str = os.getenv(f"{service_name}{i}_NUM_TO_UPGRADE")
+
+        if not all([url, api_key]): # URL and API key are mandatory
+            break  # Stop when we can't find a complete set of variables
+
+        try:
+            # Default to no limit for the instance. sys.maxsize is used as a practical stand-in for infinity.
+            instance_limit = sys.maxsize
+            if num_to_upgrade_str and num_to_upgrade_str.isdigit():
+                val = int(num_to_upgrade_str)
+                if val > 0:  # A limit of 0 or less is treated as no limit.
+                    instance_limit = val
+                else: # If 0 or less, treat as no limit
+                    logger.info(f"NUM_TO_UPGRADE for {service_name}{i} is 0 or less, treating as no limit for this instance.")
+
+            config = {
+                "url": url,
+                "api_key": api_key,
+                "num_to_upgrade": instance_limit
+            }
+            configs.append(config)
+            logger.info(f"Loaded configuration for {service_name}{i} (instance limit: {instance_limit if instance_limit != sys.maxsize else 'no limit'})")
+        except (ValueError, TypeError):
+            logger.error(f"Invalid NUM_TO_UPGRADE value for {service_name}{i}. Skipping.")
+        i += 1
+    return configs
+
+def gather_all_upgradeables(radarr_configs, sonarr_configs):
+    """Gathers all upgradeable items from all configured instances."""
+    all_potential_upgrades = []
+    for config in radarr_configs:
+        service, items = get_radarr_upgradeables(config)
+        for item in items:
+            item['service'] = service
+            item['instance_num_to_upgrade'] = config['num_to_upgrade']
+        all_potential_upgrades.extend(items)
+
+    for config in sonarr_configs:
+        service, items = get_sonarr_upgradeables(config)
+        for item in items:
+            item['service'] = service
+            item['instance_num_to_upgrade'] = config['num_to_upgrade']
+        all_potential_upgrades.extend(items)
+
+    logger.info(f"Found a total of {len(all_potential_upgrades)} items that can be upgraded across all instances.")
+    return all_potential_upgrades
+
+def trigger_grouped_searches(items_to_search, delay_seconds=0, dry_run=False):
+    """Groups items by service and triggers the appropriate search commands."""
+    searches_by_service = {}
+    for item in items_to_search:
+        service = item['service']
+        if service not in searches_by_service:
+            searches_by_service[service] = {'movies': [], 'episodes': []}
+
+        if item['type'] == 'movie':
+            searches_by_service[service]['movies'].append(item)
+        elif item['type'] == 'episode':
+            searches_by_service[service]['episodes'].append(item)
+
+    num_services = len(searches_by_service)
+    for i, (service, items) in enumerate(searches_by_service.items()):
+        if items['movies']:
+            logger.info(f"Queueing search for {len(items['movies'])} movies on {service.url}")
+            for movie in items['movies']:
+                logger.info(f"  - {movie['title']}")
+            service.trigger_search("MoviesSearch", "movieIds", [m['id'] for m in items['movies']], dry_run)
+
+        if items['episodes']:
+            logger.info(f"Queueing search for {len(items['episodes'])} episodes on {service.url}")
+            for episode in items['episodes']:
+                logger.info(f"  - {episode['title']}")
+            service.trigger_search("EpisodeSearch", "episodeIds", [e['id'] for e in items['episodes']], dry_run)
         
-    SEARCH_MOVIES_POST_API_CALL = RADARR_URL + API_PATH + COMMAND_ENDPOINT
-    requests.post(SEARCH_MOVIES_POST_API_CALL, headers=radarr_headers, json=data)
+        # If there's a delay configured and this is not the last service, wait.
+        if delay_seconds > 0 and i < num_services - 1:
+            logger.info(f"Waiting for {delay_seconds} seconds before processing next instance...")
+            time.sleep(delay_seconds)
 
-if PROCESS_SONARR:
-    # Set Authorization sonarr headers for API calls
-    sonarr_headers = {
-        'Authorization': SONARR_API_KEY,
-    }
+def apply_upgrade_limits(all_potential_upgrades, global_limit):
+    """Applies instance and global limits to the list of potential upgrades."""
+    # First, apply the per-instance limits to create a pool of eligible items.
+    items_eligible_after_instance_limits = []
+    # Group by service object to apply limits per unique instance
+    grouped_by_service_object = {}
+    for item in all_potential_upgrades:
+        service_obj = item['service']
+        if service_obj not in grouped_by_service_object:
+            grouped_by_service_object[service_obj] = {
+                'items': [],
+                'instance_num_to_upgrade': item['instance_num_to_upgrade']
+            }
+        grouped_by_service_object[service_obj]['items'].append(item)
 
-    quality_to_formats = {}
-    series = {}
-    episode_files = {}
+    for service_obj, data in grouped_by_service_object.items():
+        instance_items = data['items']
+        instance_limit = data['instance_num_to_upgrade']
+        num_to_select_from_instance = min(instance_limit, len(instance_items))
+        selected_from_instance = random.sample(instance_items, k=num_to_select_from_instance)
+        items_eligible_after_instance_limits.extend(selected_from_instance)
+    
+    logger.info(f"After applying instance limits, {len(items_eligible_after_instance_limits)} items are eligible for upgrade.")
 
-    def get_sonarr_quality_cutoff_scores():
-        QUALITY_PROFILES_GET_API_CALL = SONARR_URL + API_PATH + QUALITY_PROFILE_ENDPOINT
-        quality_profiles = requests.get(QUALITY_PROFILES_GET_API_CALL, headers=sonarr_headers).json()
-        for quality in quality_profiles:
-            quality_to_formats.update({quality["id"]: quality["cutoffFormatScore"]})
+    # Second, from the pool of eligible items, apply the global MAX_UPGRADES limit.
+    num_to_search = len(items_eligible_after_instance_limits) if global_limit is None else min(global_limit, len(items_eligible_after_instance_limits))
+    return random.sample(items_eligible_after_instance_limits, k=num_to_search)
 
-    # Get all movies and return a dictionary of movies
-    def get_series():
-        logger.info("Querying Series API")
-        SERIES_GET_API_CALL = SONARR_URL + API_PATH + SERIES_ENDPOINT
-        series = requests.get(SERIES_GET_API_CALL, headers=sonarr_headers).json()
-        return series
+def main():
+    """Main execution function."""
+    logger.info("======================================================")
+    logger.info("Starting Custom Format Search script")
 
-    # Get all moviefiles for all movies and if moviefile exists and the customFormatScore is less than the wanted score, add it to dictionary and return dictionary
-    def get_episode_files(series):
-        logger.info("Querying EpisodeFiles API")
-        for serie in series:
-            series_quality_profile_id = serie["qualityProfileId"]
-            if serie["statistics"]["episodeFileCount"] > 0:
-                EPISODE_FILE_GET_API_CALL = SONARR_URL + API_PATH + EPISODEFILE_ENDPOINT + "?seriesId=" + str(serie["id"])
-                series_episode_files = requests.get(EPISODE_FILE_GET_API_CALL, headers=sonarr_headers).json()
-                for episode in series_episode_files:
-                    # Build dictionary of episode files needing upgrades
-                    if episode["customFormatScore"] < quality_to_formats[series_quality_profile_id]:
-                        EPISODE_GET_API_CALL = SONARR_URL + API_PATH + EPISODE_ENDPOINT + "?episodeFileId=" + str(episode["id"])
-                        episode_data = requests.get(EPISODE_GET_API_CALL, headers=sonarr_headers).json()
-                        monitored_str = str(episode_data[0]["monitored"])
-                        is_monitored = monitored_str.lower() == "true" if monitored_str else False
-                        if is_monitored:
-                            episode_files[episode_data[0]["id"]] = {}
-                            episode_files[episode_data[0]["id"]]["title"] = episode_data[0]["title"]
-                            episode_files[episode_data[0]["id"]]["customFormatScore"] = episode["customFormatScore"]
-                            episode_files[episode_data[0]["id"]]["wantedCustomFormatScore"] = quality_to_formats[series_quality_profile_id]
-        return episode_files
+    dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+    if dry_run:
+        logger.info("DRY RUN is enabled. No actual search commands will be sent.")
 
-    # Get all quality profile ids and their cutoff scores and add to dictionary
-    logger.info("Querying Sonarr Quality Custom Format Cutoff Scores")
-    get_sonarr_quality_cutoff_scores()
+    delay_str = os.getenv("DELAY_BETWEEN_INSTANCES", "0")
+    try:
+        DELAY_BETWEEN_INSTANCES = int(delay_str) if delay_str.isdigit() else 0
+        if DELAY_BETWEEN_INSTANCES < 0:
+            DELAY_BETWEEN_INSTANCES = 0
+    except ValueError:
+        DELAY_BETWEEN_INSTANCES = 0
 
-    # Select random movies to upgrade
-    random_keys = list(set(random.choices(list(get_episode_files(get_series()).keys()), k=NUM_EPISODES_TO_UPGRADE)))
+    max_upgrades_str = os.getenv("MAX_UPGRADES")
+    try:
+        MAX_UPGRADES = int(max_upgrades_str) if max_upgrades_str and max_upgrades_str.isdigit() else None
+        if MAX_UPGRADES is not None and MAX_UPGRADES <= 0:
+            # A global limit of 0 or less is nonsensical, so treat it as no limit.
+            MAX_UPGRADES = None # Treat 0 or less as no limit
+    except ValueError:
+        logger.warning(f"Invalid MAX_UPGRADES value '{max_upgrades_str}'. Disabling global limit.")
+        MAX_UPGRADES = None
 
-    # Set data payload for the movies to search
-    data = {
-        "name": "EpisodeSearch",
-        "episodeIds": random_keys
-    }
-    # Do the thing
-    logger.info("Keys to search are " + str(random_keys))
-    for key in random_keys:
-        logger.info("Starting search for " + episode_files[key]["title"])
-        
-    SEARCH_EPISODES_POST_API_CALL = SONARR_URL + API_PATH + COMMAND_ENDPOINT
-    requests.post(SEARCH_EPISODES_POST_API_CALL, headers=sonarr_headers, json=data)
+    radarr_configs = load_configs("RADARR")
+    sonarr_configs = load_configs("SONARR")
+
+    all_potential_upgrades = gather_all_upgradeables(radarr_configs, sonarr_configs)
+
+    if not all_potential_upgrades:
+        logger.info("No items to upgrade. Exiting.")
+        return
+
+    final_items_to_search = apply_upgrade_limits(all_potential_upgrades, MAX_UPGRADES)
+
+    limit_text = "no limit" if MAX_UPGRADES is None else str(MAX_UPGRADES)
+    logger.info(f"Global limit is {limit_text}. Selected {len(final_items_to_search)} items to search.")
+
+    trigger_grouped_searches(final_items_to_search, delay_seconds=DELAY_BETWEEN_INSTANCES, dry_run=dry_run)
+
+    logger.info("Script finished.")
+    logger.info("======================================================")
+
+if __name__ == "__main__":
+    main()

@@ -1,11 +1,23 @@
 ---
 services:
-  radarr-cf-search:
-    image: ghcr.io/thehesster/radarr-cf-search:latest
-    container_name: radarr-cf-search
+  cf-search:
+    image: ghcr.io/gitdeath/cf-search:latest
+    container_name: cf-search # Renamed for consistency
     environment:
-      - CRON_SCHEDULE=* * * * *
+      # --- Core Settings ---
+      - CRON_SCHEDULE=0 2 * * * # Example: Run at 2 AM daily
       - TZ=America/Los_Angeles
+      # --- Application Settings (Alternative to .env file) ---
+      # The settings below (MAX_UPGRADES, DRY_RUN, instance details, etc.) can be
+      # defined here instead of using a .env file. Variables set here will take
+      # precedence over the .env file.
+      # DRY_RUN is enabled by default for safety. Set to 'false' after verifying your configuration.
+      - DRY_RUN=true
+      # - MAX_UPGRADES=20
+      # - RADARR0_URL=http://radarr:7878
+      # - RADARR0_API_KEY=your_radarr_api_key
+      # - RADARR0_NUM_TO_UPGRADE=5
     volumes:
-      - /path/to/config:/config # place your .env file in here
-      
+      # Mount a host directory to /config. This is used for persistent logging
+      # and for loading the .env file if you choose to use one.
+      - /path/to/config:/config

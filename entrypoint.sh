@@ -1,17 +1,25 @@
 #!/bin/bash
 
-# Replace placeholder in cron job template with the environment variable
-if [ -z "$CRON_SCHEDULE" ]; then
-  echo "CRON_SCHEDULE environment variable not set, using default schedule of every hour."
-  CRON_SCHEDULE="0 * * * *"  # Default to every hour if not set
+# If a .env file does not exist in the config volume, create one from the example.
+# This provides a template configuration for first-time users.
+if [ ! -f "/config/.env" ]; then
+  echo "No .env file found in /config. Creating one from the example."
+  cp /app/.example_env /config/.env
 fi
 
-# Replace the cronjob template with the actual cron schedule
-sed "s|\${CRON_SCHEDULE}|$CRON_SCHEDULE|" /etc/cron.d/my-cron-job > /etc/cron.d/my-cron-job.actual
+# Set a default cron schedule if the CRON_SCHEDULE environment variable is not provided.
+if [ -z "$CRON_SCHEDULE" ]; then
+  echo "CRON_SCHEDULE environment variable not set, using default schedule of '0 2 * * *' (2 AM daily)."
+  CRON_SCHEDULE="0 2 * * *"  # Default to 2 AM daily if not set
+fi
 
-# Set permissions for the cron job file
+# Dynamically create the final cron job file by substituting the schedule placeholder.
+sed "s|\${CRON_SCHEDULE}|$CRON_SCHEDULE|" /app/cronjob.template > /etc/cron.d/my-cron-job.actual
+
+# Ensure cron can read the job file and add it to the crontab.
 chmod 0644 /etc/cron.d/my-cron-job.actual
 crontab /etc/cron.d/my-cron-job.actual
 
-# Start cron in the foreground
+# Start the cron daemon in the foreground. This is the main process (PID 1)
+# that keeps the container running and allows Docker to capture its logs.
 cron -f
