@@ -15,7 +15,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the application source code and supporting scripts.
 COPY app.py .
 COPY .example_env .
-COPY cronjob.template .
 COPY entrypoint.sh .
 RUN chmod +x ./entrypoint.sh
 
