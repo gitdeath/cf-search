@@ -204,27 +204,7 @@ def load_configs(service_name):
         i += 1
     return configs
 
-def gather_all_upgradeables(radarr_configs, sonarr_configs):
-    """Gathers all upgradeable items from all configured instances."""
-    all_potential_upgrades = []
-    for config in radarr_configs:
-        service, items = get_radarr_upgradeables(config)
-        for item in items:
-            item['service'] = service
-            item['instance_num_to_upgrade'] = config['num_to_upgrade']
-        all_potential_upgrades.extend(items)
-
-    for config in sonarr_configs:
-        service, items = get_sonarr_upgradeables(config)
-        for item in items:
-            item['service'] = service
-            item['instance_num_to_upgrade'] = config['num_to_upgrade']
-        all_potential_upgrades.extend(items)
-
-    logger.info(f"Found a total of {len(all_potential_upgrades)} items that can be upgraded across all instances.")
-    return all_potential_upgrades
-
-def trigger_grouped_searches(items_to_search, delay_seconds=0, dry_run=False):
+def trigger_grouped_searches(items_to_search, dry_run=False):
     """Groups items by service and triggers the appropriate search commands."""
     searches_by_service = {}
     for item in items_to_search:
@@ -237,8 +217,7 @@ def trigger_grouped_searches(items_to_search, delay_seconds=0, dry_run=False):
         elif item['type'] == 'episode':
             searches_by_service[service]['episodes'].append(item)
 
-    num_services = len(searches_by_service)
-    for i, (service, items) in enumerate(searches_by_service.items()):
+    for service, items in searches_by_service.items():
         if items['movies']:
             logger.info(f"Queueing search for {len(items['movies'])} movies on {service.url}")
             for movie in items['movies']:
@@ -250,39 +229,6 @@ def trigger_grouped_searches(items_to_search, delay_seconds=0, dry_run=False):
             for episode in items['episodes']:
                 logger.info(f"  - {episode['title']}")
             service.trigger_search("EpisodeSearch", "episodeIds", [e['id'] for e in items['episodes']], dry_run)
-        
-        # If there's a delay configured and this is not the last service, wait.
-        if delay_seconds > 0 and i < num_services - 1:
-            logger.info(f"Waiting for {delay_seconds} seconds before processing next instance...")
-            time.sleep(delay_seconds)
-
-def apply_upgrade_limits(all_potential_upgrades, global_limit):
-    """Applies instance and global limits to the list of potential upgrades."""
-    # First, apply the per-instance limits to create a pool of eligible items.
-    items_eligible_after_instance_limits = []
-    # Group by service object to apply limits per unique instance
-    grouped_by_service_object = {}
-    for item in all_potential_upgrades:
-        service_obj = item['service']
-        if service_obj not in grouped_by_service_object:
-            grouped_by_service_object[service_obj] = {
-                'items': [],
-                'instance_num_to_upgrade': item['instance_num_to_upgrade']
-            }
-        grouped_by_service_object[service_obj]['items'].append(item)
-
-    for service_obj, data in grouped_by_service_object.items():
-        instance_items = data['items']
-        instance_limit = data['instance_num_to_upgrade']
-        num_to_select_from_instance = min(instance_limit, len(instance_items))
-        selected_from_instance = random.sample(instance_items, k=num_to_select_from_instance)
-        items_eligible_after_instance_limits.extend(selected_from_instance)
-    
-    logger.info(f"After applying instance limits, {len(items_eligible_after_instance_limits)} items are eligible for upgrade.")
-
-    # Second, from the pool of eligible items, apply the global MAX_UPGRADES limit.
-    num_to_search = len(items_eligible_after_instance_limits) if global_limit is None else min(global_limit, len(items_eligible_after_instance_limits))
-    return random.sample(items_eligible_after_instance_limits, k=num_to_search)
 
 def main():
     """Main execution function."""
@@ -311,21 +257,38 @@ def main():
         logger.warning(f"Invalid MAX_UPGRADES value '{max_upgrades_str}'. Disabling global limit.")
         MAX_UPGRADES = None
 
+    # Combine all configs into a single list for sequential processing
     radarr_configs = load_configs("RADARR")
     sonarr_configs = load_configs("SONARR")
+    all_configs = radarr_configs + sonarr_configs
 
-    all_potential_upgrades = gather_all_upgradeables(radarr_configs, sonarr_configs)
+    remaining_global_upgrades = sys.maxsize if MAX_UPGRADES is None else MAX_UPGRADES
 
-    if not all_potential_upgrades:
-        logger.info("No items to upgrade. Exiting.")
-        return
+    for i, config in enumerate(all_configs):
+        if remaining_global_upgrades <= 0:
+            logger.info("Global upgrade limit reached. No more instances will be processed.")
+            break
 
-    final_items_to_search = apply_upgrade_limits(all_potential_upgrades, MAX_UPGRADES)
+        # Determine the correct function to call based on the service name in the URL
+        get_upgradeables_func = get_radarr_upgradeables if 'radarr' in config['url'].lower() else get_sonarr_upgradeables
+        
+        service, items = get_upgradeables_func(config)
+        if not items:
+            continue
 
-    limit_text = "no limit" if MAX_UPGRADES is None else str(MAX_UPGRADES)
-    logger.info(f"Global limit is {limit_text}. Selected {len(final_items_to_search)} items to search.")
+        # Apply instance and global limits
+        instance_limit = config['num_to_upgrade']
+        num_to_select = min(len(items), instance_limit, remaining_global_upgrades)
+        
+        items_to_search = random.sample(items, k=num_to_select)
+        remaining_global_upgrades -= len(items_to_search)
 
-    trigger_grouped_searches(final_items_to_search, delay_seconds=DELAY_BETWEEN_INSTANCES, dry_run=dry_run)
+        trigger_grouped_searches(items_to_search, dry_run=dry_run)
+
+        if DELAY_BETWEEN_INSTANCES > 0 and i < len(all_configs) - 1:
+            logger.info(f"Waiting for {DELAY_BETWEEN_INSTANCES} seconds before processing next instance...")
+            if not dry_run:
+                time.sleep(DELAY_BETWEEN_INSTANCES)
 
     logger.info("Script finished.")
     logger.info("======================================================")
