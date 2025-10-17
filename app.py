@@ -192,15 +192,19 @@ def load_configs(service_name):
             
             # If num_to_upgrade_str is not set, is not a digit, or is negative, it's treated as unlimited.
             
+            service_type = 'radarr' if 'radarr' in url.lower() else 'sonarr'
+
             config = {
                 "url": url,
                 "api_key": api_key,
-                "num_to_upgrade": instance_limit
+                "num_to_upgrade": instance_limit,
+                "service_type": service_type
             }
             configs.append(config)
             logger.info(f"Loaded configuration for {service_name}{i} (instance limit: {instance_limit if instance_limit != sys.maxsize else 'no limit'})")
         except (ValueError, TypeError):
             logger.error(f"Invalid NUM_TO_UPGRADE value for {service_name}{i}. Skipping.")
+        
         i += 1
     return configs
 
@@ -264,16 +268,17 @@ def main():
 
     remaining_global_upgrades = sys.maxsize if MAX_UPGRADES is None else MAX_UPGRADES
 
-    for i, config in enumerate(all_configs):
-        if remaining_global_upgrades <= 0:
-            logger.info("Global upgrade limit reached. No more instances will be processed.")
-            break
-
+    for i, config in enumerate(all_configs):        
         # Determine the correct function to call based on the service name in the URL
-        get_upgradeables_func = get_radarr_upgradeables if 'radarr' in config['url'].lower() else get_sonarr_upgradeables
+        get_upgradeables_func = get_radarr_upgradeables if config['service_type'] == 'radarr' else get_sonarr_upgradeables
         
         service, items = get_upgradeables_func(config)
         if not items:
+            # If there are no items, we might still need to delay before the next instance.
+            if DELAY_BETWEEN_INSTANCES > 0 and i < len(all_configs) - 1:
+                logger.info(f"Waiting for {DELAY_BETWEEN_INSTANCES} seconds before processing next instance...")
+                if not dry_run:
+                    time.sleep(DELAY_BETWEEN_INSTANCES)
             continue
 
         # Apply instance and global limits
@@ -281,9 +286,20 @@ def main():
         num_to_select = min(len(items), instance_limit, remaining_global_upgrades)
         
         items_to_search = random.sample(items, k=num_to_select)
+
+        # Add the service object to each item so it can be used for grouping.
+        for item in items_to_search:
+            item['service'] = service
+
         remaining_global_upgrades -= len(items_to_search)
 
         trigger_grouped_searches(items_to_search, dry_run=dry_run)
+
+        # Check if the global limit has been reached and break for the next run.
+        if remaining_global_upgrades <= 0:
+            total_upgrades_this_run = MAX_UPGRADES if MAX_UPGRADES is not None else len(items_to_search)
+            logger.info(f"Global upgrade limit of {total_upgrades_this_run} reached. No more instances will be processed in this run.")
+            break
 
         if DELAY_BETWEEN_INSTANCES > 0 and i < len(all_configs) - 1:
             logger.info(f"Waiting for {DELAY_BETWEEN_INSTANCES} seconds before processing next instance...")
