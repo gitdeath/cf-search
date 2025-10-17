@@ -181,13 +181,17 @@ def load_configs(service_name):
         try:
             # Default to no limit for the instance. sys.maxsize is used as a practical stand-in for infinity.
             instance_limit = sys.maxsize
-            if num_to_upgrade_str and num_to_upgrade_str.isdigit():
-                val = int(num_to_upgrade_str)
-                if val > 0:  # A limit of 0 or less is treated as no limit.
-                    instance_limit = val
-                else: # If 0 or less, treat as no limit
-                    logger.info(f"NUM_TO_UPGRADE for {service_name}{i} is 0 or less, treating as no limit for this instance.")
-
+            if num_to_upgrade_str is not None and num_to_upgrade_str.isdigit():
+                limit_val = int(num_to_upgrade_str)
+                if limit_val == 0:
+                    logger.info(f"NUM_TO_UPGRADE for {service_name}{i} is 0. This instance will be skipped.")
+                    i += 1
+                    continue
+                elif limit_val > 0:
+                    instance_limit = limit_val
+            
+            # If num_to_upgrade_str is not set, is not a digit, or is negative, it's treated as unlimited.
+            
             config = {
                 "url": url,
                 "api_key": api_key,

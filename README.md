@@ -23,10 +23,10 @@ The script is configured using environment variables. These can be placed in a `
 | `DELAY_BETWEEN_INSTANCES` | The number of seconds to wait between triggering searches for each instance. This helps to stagger the load on indexers and download clients. | `10` |
 | `RADARR{n}_URL` | URL for the Radarr instance (e.g., `RADARR0_URL`, `RADARR1_URL`). | (none) |
 | `RADARR{n}_API_KEY` | API Key for the corresponding Radarr instance. | (none) |
-| `RADARR{n}_NUM_TO_UPGRADE` | The maximum number of movies to search for from THIS instance per run. Set to `0` or leave unset for no limit for this specific instance. | `5` |
+| `RADARR{n}_NUM_TO_UPGRADE` | The maximum number of movies to search for from THIS instance per run. Set to `0` to disable. Leave unset or set to a negative number for no limit. | `5` |
 | `SONARR{n}_URL` | URL for the Sonarr instance (e.g., `SONARR0_URL`, `SONARR1_URL`). | (none) |
 | `SONARR{n}_API_KEY` | API Key for the corresponding Sonarr instance. | (none) |
-| `SONARR{n}_NUM_TO_UPGRADE` | The maximum number of episodes to search for from THIS instance per run. Set to `0` or leave unset for no limit for this specific instance. | `10` |
+| `SONARR{n}_NUM_TO_UPGRADE` | The maximum number of episodes to search for from THIS instance per run. Set to `0` to disable. Leave unset or set to a negative number for no limit. | `10` |
 
 ## Setup Instructions
 
