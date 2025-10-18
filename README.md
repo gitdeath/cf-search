@@ -8,6 +8,7 @@ This is a Python script, run via Docker, that looks through your Radarr and Sona
 -   **Multi-Instance Support:** Connect to and manage multiple Radarr and Sonarr instances from a single container.
 -   **Granular Control:** Set both a global cap (`MAX_UPGRADES`) and per-instance limits (`*_NUM_TO_UPGRADE`) on the number of searches per run.
 -   **Safe Testing:** Use the `DRY_RUN` mode to see what the script would do without sending any actual search commands.
+-   **Search History:** Remembers which items have been searched for and prevents re-searching them for a configurable cooldown period.
 -   **Easy First-Time Setup:** Automatically creates a default `.env` configuration file if one doesn't exist in your config volume.
 -   **Flexible Configuration:** Configure via a `.env` file or directly in your `docker-compose.yml`.
 
@@ -18,9 +19,10 @@ The script is configured using environment variables. These can be placed in a `
 | Variable | Description | Default Value |
 | --- | --- | --- |
 | `TZ` | Sets the timezone for the container, affecting cron scheduling and log timestamps. | `America/Los_Angeles` |
-| `MAX_UPGRADES` | The maximum total number of items to search for across ALL instances in a single run. Acts as a global cap. Set to `0` or leave unset for no global limit. | `20` |
+| `MAX_UPGRADES` | The maximum total number of items to search for across ALL instances in a single run. Set to `0` to disable all searches. A negative value means no global limit. | `20` |
 | `DRY_RUN` | Enabled by default for safety. Set to `true` to run in simulation mode. Set to `false` to perform actual searches after verifying your configuration. | `true` |
 | `DELAY_BETWEEN_INSTANCES` | The number of seconds to wait between triggering searches for each instance. This helps to stagger the load on indexers and download clients. | `10` |
+| `HISTORY_COOLDOWN_DAYS` | The number of days to wait before an item can be searched for again. Prevents the script from repeatedly searching for the same media. | `30` |
 | `RADARR{n}_URL` | URL for the Radarr instance (e.g., `RADARR0_URL`, `RADARR1_URL`). | (none) |
 | `RADARR{n}_API_KEY` | API Key for the corresponding Radarr instance. | (none) |
 | `RADARR{n}_NUM_TO_UPGRADE` | The maximum number of movies to search for from THIS instance per run. Set to `0` to disable. Leave unset or set to a negative number for no limit. | `5` |
