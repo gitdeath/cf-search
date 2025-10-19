@@ -161,10 +161,12 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds):
 
     for series in all_series:
         if not series.get("monitored") or series.get("statistics", {}).get("episodeFileCount", 0) == 0:
+            logger.debug(f"Skipping series '{series['title']}' (unmonitored or no files).")
             continue
 
         cutoff_score = quality_scores.get(series["qualityProfileId"])
         if cutoff_score is None:
+            logger.debug(f"Skipping series '{series['title']}' (no valid cutoff score in quality profile).")
             continue
 
         # Fetch all episodes and all episode files for the series in two efficient calls
@@ -175,13 +177,13 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds):
             continue
 
         # Create a map of episodeFileId to episode details for quick lookup
-        episode_map = {ep["episodeFileId"]: ep for ep in all_episodes if ep.get("episodeFileId")}
+        episode_map = {ep["id"]: ep for ep in all_episodes}
 
         for ep_file in all_episode_files:
             current_score = ep_file.get("customFormatScore", 0)
             if current_score < cutoff_score:
-                # Look up the episode details from our map instead of a new API call
-                episode = episode_map.get(ep_file["id"])
+                # Look up the episode details using the episodeId from the file object
+                episode = episode_map.get(ep_file.get("episodeId"))
                 if not (episode and episode.get("monitored")):
                     continue
                 
@@ -207,39 +209,43 @@ def load_configs(service_name):
     configs = []
     i = 0
     while True:
-        url = os.getenv(f"{service_name}{i}_URL")
-        api_key = os.getenv(f"{service_name}{i}_API_KEY")
-        num_to_upgrade_str = os.getenv(f"{service_name}{i}_NUM_TO_UPGRADE")
+        prefix = f"{service_name}{i}"
+        url = os.getenv(f"{prefix}_URL")
+        api_key = os.getenv(f"{prefix}_API_KEY")
 
         if not all([url, api_key]): # URL and API key are mandatory
             break  # Stop when we can't find a complete set of variables
 
+        num_to_upgrade_str = os.getenv(f"{prefix}_NUM_TO_UPGRADE")
+        
         try:
-            # Default to no limit for the instance. sys.maxsize is used as a practical stand-in for infinity.
-            instance_limit = sys.maxsize
-            if num_to_upgrade_str is not None and num_to_upgrade_str.isdigit():
+            if num_to_upgrade_str is None:
+                # Default to no limit if the variable is not set
+                instance_limit = sys.maxsize
+            else:
                 limit_val = int(num_to_upgrade_str)
                 if limit_val == 0:
-                    logger.info(f"NUM_TO_UPGRADE for {service_name}{i} is 0. This instance will be skipped.")
+                    logger.info(f"NUM_TO_UPGRADE for {prefix} is 0. This instance will be skipped.")
                     i += 1
                     continue
-                elif limit_val > 0:
-                    instance_limit = limit_val
-            
-            # If num_to_upgrade_str is not set, is not a digit, or is negative, it's treated as unlimited.
-            
-            # Determine service type from the variable group name ('RADARR' or 'SONARR')
-            # This is more reliable than inferring from the URL.
-            config = {
-                "url": url,
-                "api_key": api_key,
-                "num_to_upgrade": instance_limit,
-                "service_type": service_name.lower()
-            }
-            configs.append(config)
-            logger.info(f"Loaded configuration for {service_name}{i} (instance limit: {instance_limit if instance_limit != sys.maxsize else 'no limit'})")
+                # A negative value means no limit for this instance
+                instance_limit = sys.maxsize if limit_val < 0 else limit_val
         except (ValueError, TypeError):
-            logger.error(f"Invalid NUM_TO_UPGRADE value for {service_name}{i}. Skipping.")
+            logger.warning(f"Invalid NUM_TO_UPGRADE value '{num_to_upgrade_str}' for {prefix}. Treating as unlimited.")
+            instance_limit = sys.maxsize
+        
+        # Determine service type from the variable group name ('RADARR' or 'SONARR')
+        # This is more reliable than inferring from the URL.
+        config = {
+            "url": url,
+            "api_key": api_key,
+            "num_to_upgrade": instance_limit,
+            "service_type": service_name.lower()
+        }
+        configs.append(config)
+        
+        limit_str = 'unlimited' if instance_limit == sys.maxsize else str(instance_limit)
+        logger.info(f"Loaded configuration for {prefix} (instance limit: {limit_str})")
         
         i += 1
     return configs
@@ -327,13 +333,15 @@ def main():
     cooldown_seconds = cooldown_days * 86400
     logger.info(f"Search history cooldown is set to {cooldown_days} days.")
 
-    delay_str = os.getenv("DELAY_BETWEEN_INSTANCES", "0")
+    delay_str = os.getenv("DELAY_BETWEEN_INSTANCES", "10")
     try:
-        DELAY_BETWEEN_INSTANCES = int(delay_str) if delay_str.isdigit() else 0
+        DELAY_BETWEEN_INSTANCES = int(delay_str)
         if DELAY_BETWEEN_INSTANCES < 0:
+            logger.warning(f"Invalid DELAY_BETWEEN_INSTANCES value '{delay_str}'. Using 0.")
             DELAY_BETWEEN_INSTANCES = 0
     except ValueError:
-        DELAY_BETWEEN_INSTANCES = 0
+        logger.warning(f"Invalid DELAY_BETWEEN_INSTANCES value '{delay_str}'. Using default of 10.")
+        DELAY_BETWEEN_INSTANCES = 10
 
     max_upgrades_str = os.getenv("MAX_UPGRADES", "20")
     try:
