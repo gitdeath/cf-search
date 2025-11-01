@@ -7,13 +7,6 @@ if [ ! -f "/config/.env" ]; then
   cp /app/.example_env /config/.env
 fi
 
-# Source the .env file if it exists, so CRON_SCHEDULE and TZ are available to this script.
-# This allows users to define them in the .env file.
-if [ -f "/config/.env" ]; then
-  echo "Loading environment variables from /config/.env"
-  export $(grep -v '^#' /config/.env | xargs)
-fi
-
 # Set a default cron schedule if the CRON_SCHEDULE environment variable is not provided.
 if [ -z "$CRON_SCHEDULE" ]; then
   echo "CRON_SCHEDULE environment variable not set, using default schedule of '0 2 * * *' (2 AM daily)."

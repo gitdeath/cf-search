@@ -14,14 +14,13 @@ This is a Python script, run via Docker, that looks through your Radarr and Sona
 
 ## Configuration
 
-The script is configured using environment variables. For best results, it's recommended to set container-level settings like `CRON_SCHEDULE` and `TZ` directly in your `docker-compose.yml`, and application-specific settings in a `.env` file. However, with the current entrypoint, `CRON_SCHEDULE` and `TZ` can also be loaded from the `.env` file.
-
-**Note:** Variables set in `docker-compose.yml` will always override those in the `.env` file.
+The script is configured using environment variables. These can be placed in a `.env` file or directly in your `docker-compose.yml`.
 
 | Variable | Description | Default Value |
 | --- | --- | --- |
 | `TZ` | Sets the timezone for the container, affecting cron scheduling and log timestamps. | `America/Los_Angeles` |
 | `MAX_UPGRADES` | The maximum total number of items to search for across ALL instances in a single run. Set to `0` to disable all searches. A negative value means no global limit. | `20` |
+| `DRY_RUN` | Enabled by default for safety. Set to `true` to run in simulation mode. Set to `false` to perform actual searches after verifying your configuration. | `true` |
 | `DELAY_BETWEEN_INSTANCES` | The number of seconds to wait between triggering searches for each instance. This helps to stagger the load on indexers and download clients. | `10` |
 | `HISTORY_COOLDOWN_DAYS` | The number of days to wait before an item can be searched for again. Prevents the script from repeatedly searching for the same media. | `30` |
 | `RADARR{n}_URL` | URL for the Radarr instance (e.g., `RADARR0_URL`, `RADARR1_URL`). | (none) |
