@@ -10,8 +10,12 @@ fi
 # Source the .env file if it exists, so CRON_SCHEDULE and TZ are available to this script.
 # This allows users to define them in the .env file.
 if [ -f "/config/.env" ]; then
-  echo "Loading environment variables from /config/.env"
-  export $(grep -v '^#' /config/.env | xargs)
+  echo "Loading environment variables from /config/.env..."
+  # Read each line, ignore comments and empty lines, and export the variable.
+  # This is safer than 'export $(grep ...)' as it handles spaces and special characters in values.
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ "$line" =~ ^#.*$ ]] || [[ -z "$line" ]] || export "$line"
+  done < /config/.env
 fi
 
 # Set a default cron schedule if the CRON_SCHEDULE environment variable is not provided.
