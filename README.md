@@ -20,10 +20,7 @@ The script is configured using environment variables. For best results, it's rec
 
 | Variable | Description | Default Value |
 | --- | --- | --- |
-| `CRON_SCHEDULE` | The cron schedule for running the script. The default is `0 2 * * *` (2 AM daily). You can use a site like crontab.guru to generate a schedule. **Best set in `docker-compose.yml`.** | `0 2 * * *` |
-| `TZ` | Sets the timezone for the container, affecting cron scheduling and log timestamps. **Best set in `docker-compose.yml`.** | `America/Los_Angeles` |
---- | --- | --- |
-| `DRY_RUN` | Enabled by default for safety. Set to `true` to run in simulation mode. Set to `false` to perform actual searches after verifying your configuration. | `true` |
+| `TZ` | Sets the timezone for the container, affecting cron scheduling and log timestamps. | `America/Los_Angeles` |
 | `MAX_UPGRADES` | The maximum total number of items to search for across ALL instances in a single run. Set to `0` to disable all searches. A negative value means no global limit. | `20` |
 | `DELAY_BETWEEN_INSTANCES` | The number of seconds to wait between triggering searches for each instance. This helps to stagger the load on indexers and download clients. | `10` |
 | `HISTORY_COOLDOWN_DAYS` | The number of days to wait before an item can be searched for again. Prevents the script from repeatedly searching for the same media. | `30` |
