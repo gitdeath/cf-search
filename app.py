@@ -119,8 +119,14 @@ def get_radarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
         current_score = "N/A"
         cutoff_score = quality_scores.get(movie["qualityProfileId"])
 
-        if movie.get("monitored") and movie.get("hasFile"):
-            movie_file = movie.get("movieFile", {})
+        if movie.get("monitored") and movie.get("movieFileId", 0) > 0:
+            # A movieFileId > 0 indicates that a file is associated with the movie.
+            # We need to fetch the movie file details separately to get the custom format score.
+            movie_file = service._get(f"moviefile/{movie['movieFileId']}")
+            if not movie_file:
+                logger.debug(f"Could not retrieve movie file details for '{movie['title']}'. Skipping.")
+                continue # Skip to the next movie
+
             current_score = movie_file.get("customFormatScore", 0)
 
             if cutoff_score is not None and current_score < cutoff_score:
