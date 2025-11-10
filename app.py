@@ -187,8 +187,8 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
         return service, upgradeable_items
 
     for series in all_series:
-        if not series.get("monitored") or series.get("statistics", {}).get("episodeFileCount", 0) == 0:
-            logger.debug(f"Skipping series '{series['title']}' (unmonitored or no files).")
+        if series.get("statistics", {}).get("episodeFileCount", 0) == 0:
+            logger.debug(f"Skipping series '{series['title']}' (no files).")
             continue
 
         cutoff_score = quality_scores.get(series["qualityProfileId"])
@@ -196,25 +196,25 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
             logger.debug(f"Skipping series '{series['title']}' (no valid cutoff score in quality profile).")
             continue
 
-        all_episodes = service._get("episode", params={"seriesId": series["id"]})
         all_episode_files = service._get("episodefile", params={"seriesId": series["id"]})
-
-        if not all_episodes or not all_episode_files:
+        if not all_episode_files:
             continue
 
-        episode_map = {ep["id"]: ep for ep in all_episodes}
-
-        for ep_file in all_episode_files:
+        for episode_file in all_episode_files:
             upgradeable = False
-            current_score = ep_file.get("customFormatScore", 0)
-            episode = episode_map.get(ep_file.get("episodeId"))
-            title = "Unknown Episode"
-            
-            if episode:
-                title = f"{series['title']} - S{episode['seasonNumber']:02d}E{episode['episodeNumber']:02d} - {episode.get('title', 'N/A')}"
+            episode = None # Will hold the episode data if fetched
+            current_score = episode_file.get("customFormatScore", 0)
 
             if current_score < cutoff_score:
-                if episode and episode.get("monitored"):
+                episode_list = service._get("episode", params={"episodeFileId": episode_file["id"]})
+                if not episode_list:
+                    logger.debug(f"Could not find matching episode for file ID {episode_file['id']}. Skipping.")
+                    continue
+                
+                episode = episode_list[0]
+                title = f"{series['title']} - S{episode['seasonNumber']:02d}E{episode['episodeNumber']:02d} - {episode.get('title', 'N/A')}"
+
+                if episode.get("monitored"):
                     history_key = f"sonarr-{episode['id']}"
                     last_searched_timestamp = search_history.get(history_key)
                     if not (last_searched_timestamp and (time.time() - last_searched_timestamp) < cooldown_seconds):
@@ -226,13 +226,28 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
                         })
                     else:
                         logger.debug(f"Skipping recently searched episode: {title}")
-
+                else:
+                    logger.debug(f"Skipping unmonitored episode: {title}")
+            
             if debug_mode:
+                if episode is None: # Fetch episode data if we don't have it yet
+                    episode_list = service._get("episode", params={"episodeFileId": episode_file["id"]})
+                    if episode_list:
+                        episode = episode_list[0]
+
+                title = "Unknown Episode"
+                episode_monitored = "Unknown"
+                has_file = False
+                if episode:
+                    title = f"{series['title']} - S{episode['seasonNumber']:02d}E{episode['episodeNumber']:02d} - {episode.get('title', 'N/A')}"
+                    episode_monitored = episode.get("monitored")
+                    has_file = episode.get("hasFile")
+
                 debug_data.append({
                     "title": title,
                     "series_monitored": series.get("monitored"),
-                    "episode_monitored": episode.get("monitored") if episode else "N/A",
-                    "hasFile": True,
+                    "episode_monitored": episode_monitored,
+                    "hasFile": has_file,
                     "current_score": current_score,
                     "cutoff_score": cutoff_score,
                     "upgradeable": upgradeable
