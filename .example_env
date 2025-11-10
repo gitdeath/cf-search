@@ -21,6 +21,12 @@ DELAY_BETWEEN_INSTANCES=10
 # This prevents the script from repeatedly searching for the same media.
 HISTORY_COOLDOWN_DAYS=30
 
+# --- Debugging Settings ---
+# Set to "true" to enable debug mode. This will save detailed lists of all processed media
+# and their upgrade eligibility to JSON files in the config directory (e.g., radarr_debug_list.json).
+# This is useful for troubleshooting why certain items are or are not being searched.
+DEBUG_MODE=false
+
 # --- Radarr Instance 0 (Main Radarr) ---
 # URL for the Radarr instance (no trailing slash).
 RADARR0_URL="http://192.168.0.100:7878"

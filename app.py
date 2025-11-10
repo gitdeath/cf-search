@@ -92,12 +92,13 @@ class ArrService:
         self._post("command", payload)
         logger.info("Search command sent successfully.")
 
-def get_radarr_upgradeables(config, search_history, cooldown_seconds):
+def get_radarr_upgradeables(config, search_history, cooldown_seconds, debug_mode=False):
     """Finds all upgradeable movies for a single Radarr instance."""
     url = config['url']
     logger.info(f"--- Processing Radarr instance: {url} ---")
     service = ArrService(url, config['api_key'])
     upgradeable_items = []
+    debug_data = []
 
     if not service.test_connection():
         logger.error(f"Could not connect to Radarr instance at {url}. Check URL and API Key. Skipping.")
@@ -114,36 +115,56 @@ def get_radarr_upgradeables(config, search_history, cooldown_seconds):
         return service, upgradeable_items
 
     for movie in all_movies:
+        upgradeable = False
+        current_score = "N/A"
+        cutoff_score = quality_scores.get(movie["qualityProfileId"])
+
         if movie.get("monitored") and movie.get("hasFile"):
             movie_file = movie.get("movieFile", {})
             current_score = movie_file.get("customFormatScore", 0)
-            cutoff_score = quality_scores.get(movie["qualityProfileId"])
 
-            if cutoff_score is None or current_score >= cutoff_score:
-                continue
+            if cutoff_score is not None and current_score < cutoff_score:
+                history_key = f"radarr-{movie['id']}"
+                last_searched_timestamp = search_history.get(history_key)
+                if not (last_searched_timestamp and (time.time() - last_searched_timestamp) < cooldown_seconds):
+                    upgradeable = True
+                    upgradeable_items.append({
+                        "id": movie["id"],
+                        "title": movie["title"],
+                        "type": "movie"
+                    })
+                else:
+                    logger.debug(f"Skipping recently searched movie: {movie['title']}")
 
-            # Item is upgradeable, now check history
-            history_key = f"radarr-{movie['id']}"
-            last_searched_timestamp = search_history.get(history_key)
-            if last_searched_timestamp and (time.time() - last_searched_timestamp) < cooldown_seconds:
-                logger.debug(f"Skipping recently searched movie: {movie['title']}")
-                continue
-
-            upgradeable_items.append({
-                "id": movie["id"],
+        if debug_mode:
+            debug_data.append({
                 "title": movie["title"],
-                "type": "movie"
+                "monitored": movie.get("monitored"),
+                "hasFile": movie.get("hasFile"),
+                "current_score": current_score,
+                "cutoff_score": cutoff_score,
+                "upgradeable": upgradeable
             })
+
+    if debug_mode:
+        debug_file_path = "/config/radarr_debug_list.json"
+        logger.info(f"Saving Radarr debug list to {debug_file_path}")
+        try:
+            with open(debug_file_path, 'w') as f:
+                json.dump(debug_data, f, indent=4)
+        except IOError as e:
+            logger.error(f"Failed to save debug list to {debug_file_path}: {e}")
 
     logger.info(f"Found {len(upgradeable_items)} movies that can be upgraded.")
     return service, upgradeable_items
 
-def get_sonarr_upgradeables(config, search_history, cooldown_seconds):
+def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode=False):
     """Finds all upgradeable episodes for a single Sonarr instance."""
     url = config['url']
     logger.info(f"--- Processing Sonarr instance: {url} ---")
     service = ArrService(url, config['api_key'])
     upgradeable_items = []
+    debug_data = []
 
     if not service.test_connection():
         logger.error(f"Could not connect to Sonarr instance at {url}. Check URL and API Key. Skipping.")
@@ -169,37 +190,56 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds):
             logger.debug(f"Skipping series '{series['title']}' (no valid cutoff score in quality profile).")
             continue
 
-        # Fetch all episodes and all episode files for the series in two efficient calls
         all_episodes = service._get("episode", params={"seriesId": series["id"]})
         all_episode_files = service._get("episodefile", params={"seriesId": series["id"]})
 
         if not all_episodes or not all_episode_files:
             continue
 
-        # Create a map of episodeFileId to episode details for quick lookup
         episode_map = {ep["id"]: ep for ep in all_episodes}
 
         for ep_file in all_episode_files:
+            upgradeable = False
             current_score = ep_file.get("customFormatScore", 0)
-            if current_score < cutoff_score:
-                # Look up the episode details using the episodeId from the file object
-                episode = episode_map.get(ep_file.get("episodeId"))
-                if not (episode and episode.get("monitored")):
-                    continue
-                
-                # Item is upgradeable, now check history
-                history_key = f"sonarr-{episode['id']}"
-                last_searched_timestamp = search_history.get(history_key)
-                if last_searched_timestamp and (time.time() - last_searched_timestamp) < cooldown_seconds:
-                    logger.debug(f"Skipping recently searched episode: {series['title']} S{episode['seasonNumber']:02d}E{episode['episodeNumber']:02d}")
-                    continue
+            episode = episode_map.get(ep_file.get("episodeId"))
+            title = "Unknown Episode"
+            
+            if episode:
+                title = f"{series['title']} - S{episode['seasonNumber']:02d}E{episode['episodeNumber']:02d} - {episode.get('title', 'N/A')}"
 
-                title = f"{series['title']} - S{episode['seasonNumber']:02d}E{episode['episodeNumber']:02d} - {episode['title']}"
-                upgradeable_items.append({
-                    "id": episode["id"],
+            if current_score < cutoff_score:
+                if episode and episode.get("monitored"):
+                    history_key = f"sonarr-{episode['id']}"
+                    last_searched_timestamp = search_history.get(history_key)
+                    if not (last_searched_timestamp and (time.time() - last_searched_timestamp) < cooldown_seconds):
+                        upgradeable = True
+                        upgradeable_items.append({
+                            "id": episode["id"],
+                            "title": title,
+                            "type": "episode",
+                        })
+                    else:
+                        logger.debug(f"Skipping recently searched episode: {title}")
+
+            if debug_mode:
+                debug_data.append({
                     "title": title,
-                    "type": "episode",
+                    "series_monitored": series.get("monitored"),
+                    "episode_monitored": episode.get("monitored") if episode else "N/A",
+                    "hasFile": True,
+                    "current_score": current_score,
+                    "cutoff_score": cutoff_score,
+                    "upgradeable": upgradeable
                 })
+
+    if debug_mode:
+        debug_file_path = "/config/sonarr_debug_list.json"
+        logger.info(f"Saving Sonarr debug list to {debug_file_path}")
+        try:
+            with open(debug_file_path, 'w') as f:
+                json.dump(debug_data, f, indent=4)
+        except IOError as e:
+            logger.error(f"Failed to save debug list to {debug_file_path}: {e}")
 
     logger.info(f"Found {len(upgradeable_items)} episodes that can be upgraded.")
     return service, upgradeable_items
@@ -324,6 +364,10 @@ def main():
     if dry_run:
         logger.info("DRY RUN is enabled. No actual search commands will be sent.")
 
+    debug_mode = os.getenv("DEBUG_MODE", "false").lower() == "true"
+    if debug_mode:
+        logger.info("DEBUG MODE is enabled. Detailed item lists will be saved.")
+
     try:
         cooldown_days = int(os.getenv("HISTORY_COOLDOWN_DAYS", "30"))
         if cooldown_days < 0:
@@ -374,7 +418,7 @@ def main():
         # Determine the correct function to call based on the service name in the URL
         get_upgradeables_func = get_radarr_upgradeables if config['service_type'] == 'radarr' else get_sonarr_upgradeables
         
-        service, items = get_upgradeables_func(config, search_history, cooldown_seconds)
+        service, items = get_upgradeables_func(config, search_history, cooldown_seconds, debug_mode)
         if not items:
             # If there are no items, we might still need to delay before the next instance.
             if DELAY_BETWEEN_INSTANCES > 0 and i < len(all_configs) - 1:

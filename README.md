@@ -21,6 +21,7 @@ The script is configured using environment variables. These can be placed in a `
 | `TZ` | Sets the timezone for the container, affecting cron scheduling and log timestamps. | `America/Los_Angeles` |
 | `MAX_UPGRADES` | The maximum total number of items to search for across ALL instances in a single run. Set to `0` to disable all searches. A negative value means no global limit. | `20` |
 | `DRY_RUN` | Enabled by default for safety. Set to `true` to run in simulation mode. Set to `false` to perform actual searches after verifying your configuration. | `true` |
+| `DEBUG_MODE` | Set to `true` to save detailed lists of all processed media and their upgrade eligibility to JSON files in the config directory. Useful for troubleshooting. | `false` |
 | `DELAY_BETWEEN_INSTANCES` | The number of seconds to wait between triggering searches for each instance. This helps to stagger the load on indexers and download clients. | `10` |
 | `HISTORY_COOLDOWN_DAYS` | The number of days to wait before an item can be searched for again. Prevents the script from repeatedly searching for the same media. | `30` |
 | `RADARR{n}_URL` | URL for the Radarr instance (e.g., `RADARR0_URL`, `RADARR1_URL`). | (none) |
