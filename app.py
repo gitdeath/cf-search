@@ -1,3 +1,16 @@
+# -*- coding: utf-8 -*-
+"""
+This script automates the process of finding and triggering upgrades for media
+in Radarr and Sonarr instances based on custom format scores.
+
+It periodically scans the libraries of configured Radarr and Sonarr instances,
+identifies media items that have a custom format score lower than the configured
+quality profile's cutoff score, and triggers a search for better-quality versions.
+
+The script is configured entirely through environment variables and is designed
+to be run in a containerized environment. It maintains a history of searched
+items to avoid re-searching the same item within a configurable cooldown period.
+"""
 import logging
 import os
 import time
@@ -8,24 +21,27 @@ import sys
 import requests
 from dotenv import load_dotenv
 
-# Create logger
+# --- Logging Setup ---
+# Configure a logger to output to both the console (stdout) and a file.
+# This provides immediate feedback and a persistent record of script activity.
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# Create handlers
+# Handlers direct log messages to the appropriate destination.
 stream_handler = logging.StreamHandler(sys.stdout)
-file_handler = logging.FileHandler('/config/output.log')
+file_handler = logging.FileHandler('/config/output.log') # Assumes a /config volume mount
 
-# Create formatters and add it to handlers
+# A consistent log format aids in parsing and readability.
 log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
 stream_handler.setFormatter(log_format)
 file_handler.setFormatter(log_format)
 
-# Add handlers to the logger
+# Register the handlers with the logger.
 logger.addHandler(stream_handler)
 logger.addHandler(file_handler)
 
-# Load .env
+# Load environment variables from a .env file located in the /config directory.
+# This allows for easy configuration without modifying the script itself.
 load_dotenv(dotenv_path="/config/.env")
 
 # --- Constants ---
@@ -34,23 +50,48 @@ HISTORY_FILE = "/config/search_history.json"
 class ArrService:
     """A generic service for interacting with Radarr or Sonarr APIs."""
     def __init__(self, url, api_key):
+        """
+        Initializes the service with API credentials.
+
+        Args:
+            url (str): The base URL of the Radarr or Sonarr instance.
+            api_key (str): The API key for authentication.
+        """
         self.url = url.rstrip('/')
         self.api_key = api_key
         self.session = requests.Session()
         self.session.headers.update({'X-Api-Key': self.api_key})
 
     def _get(self, endpoint, params=None):
-        """Performs a GET request to the API."""
+        """
+        Performs a GET request to a specified API endpoint.
+
+        Args:
+            endpoint (str): The API endpoint to query (e.g., 'system/status').
+            params (dict, optional): A dictionary of query parameters.
+
+        Returns:
+            dict or None: The JSON response from the API, or None if the request fails.
+        """
         try:
             response = self.session.get(f"{self.url}/api/v3/{endpoint}", params=params)
-            response.raise_for_status()
+            response.raise_for_status() # Raises an HTTPError for bad responses (4xx or 5xx)
             return response.json()
         except requests.exceptions.RequestException as e:
             logger.error(f"API GET request to {self.url}/api/v3/{endpoint} failed: {e}")
             return None
 
     def _post(self, endpoint, json_data):
-        """Performs a POST request to the API."""
+        """
+        Performs a POST request to a specified API endpoint.
+
+        Args:
+            endpoint (str): The API endpoint to which the data is posted.
+            json_data (dict): The JSON payload to send.
+
+        Returns:
+            dict or None: The JSON response from the API, or None if the request fails.
+        """
         try:
             response = self.session.post(f"{self.url}/api/v3/{endpoint}", json=json_data)
             response.raise_for_status()
@@ -60,20 +101,40 @@ class ArrService:
             return None
 
     def get_quality_profile_scores(self):
-        """Fetches quality profiles and returns a map of ID to cutoff score."""
+        """
+        Fetches all quality profiles and maps their IDs to their cutoff format scores.
+        This is crucial for determining if an item is upgradeable.
+
+        Returns:
+            dict: A mapping of quality profile IDs (int) to cutoff scores (int).
+        """
         profiles = self._get("qualityprofile")
         if profiles is None:
             return {}
         return {profile["id"]: profile["cutoffFormatScore"] for profile in profiles}
 
     def test_connection(self):
-        """Tests the connection to the service by fetching system status."""
+        """
+        Tests the connection to the service by fetching system status.
+        This is a lightweight way to validate credentials and connectivity.
+
+        Returns:
+            bool: True if the connection is successful, False otherwise.
+        """
         logger.debug(f"Testing connection to {self.url}...")
         status = self._get("system/status")
         return status is not None
 
     def trigger_search(self, command_name, item_ids_key, item_ids, dry_run=False):
-        """Triggers a search command for a list of item IDs."""
+        """
+        Triggers a search command (e.g., 'MoviesSearch') for a list of item IDs.
+
+        Args:
+            command_name (str): The name of the command to trigger (e.g., 'MoviesSearch').
+            item_ids_key (str): The key for the list of IDs in the payload (e.g., 'movieIds').
+            item_ids (list): A list of movie or episode IDs to search for.
+            dry_run (bool): If True, logs the action without sending the command.
+        """
         if not item_ids:
             logger.info("No items to search for.")
             return
@@ -93,7 +154,19 @@ class ArrService:
         logger.info("Search command sent successfully.")
 
 def get_radarr_upgradeables(config, search_history, cooldown_seconds, debug_mode=False):
-    """Finds all upgradeable movies for a single Radarr instance."""
+    """
+    Scans a Radarr instance to find all movies that are eligible for an upgrade
+    based on their custom format score.
+
+    Args:
+        config (dict): Configuration for the Radarr instance.
+        search_history (dict): A history of recently searched items.
+        cooldown_seconds (int): The minimum time in seconds before an item can be searched again.
+        debug_mode (bool): If True, saves a detailed list of all processed items.
+
+    Returns:
+        tuple: A tuple containing the ArrService instance and a list of upgradeable items.
+    """
     url = config['url']
     logger.info(f"--- Processing Radarr instance: {url} ---")
     service = ArrService(url, config['api_key'])
@@ -119,19 +192,22 @@ def get_radarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
         current_score = "N/A"
         cutoff_score = quality_scores.get(movie["qualityProfileId"])
 
+        # Only consider movies that are monitored and have an associated file.
         if movie.get("monitored") and movie.get("movieFileId", 0) > 0:
-            # A movieFileId > 0 indicates that a file is associated with the movie.
-            # We need to fetch the movie file details separately to get the custom format score.
+            # The main movie endpoint doesn't include the file's custom format score,
+            # so a separate call to the moviefile endpoint is required.
             movie_file = service._get(f"moviefile/{movie['movieFileId']}")
             if not movie_file:
                 logger.debug(f"Could not retrieve movie file details for '{movie['title']}'. Skipping.")
-                continue # Skip to the next movie
+                continue
 
             current_score = movie_file.get("customFormatScore", 0)
 
+            # Check if the current score is below the profile's cutoff.
             if cutoff_score is not None and current_score < cutoff_score:
                 history_key = f"radarr-{movie['id']}"
                 last_searched_timestamp = search_history.get(history_key)
+                # Ensure the movie hasn't been searched recently to avoid spamming trackers.
                 if not (last_searched_timestamp and (time.time() - last_searched_timestamp) < cooldown_seconds):
                     upgradeable = True
                     upgradeable_items.append({
@@ -153,7 +229,8 @@ def get_radarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
             })
 
     if debug_mode:
-        debug_file_path = "/config/radarr_debug_list.json"
+        instance_name = config['instance_name']
+        debug_file_path = f"/config/radarr_debug_list_{instance_name}.json"
         logger.info(f"Saving Radarr debug list to {debug_file_path}")
         try:
             with open(debug_file_path, 'w') as f:
@@ -165,7 +242,19 @@ def get_radarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
     return service, upgradeable_items
 
 def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode=False):
-    """Finds all upgradeable episodes for a single Sonarr instance."""
+    """
+    Scans a Sonarr instance to find all episodes that are eligible for an upgrade
+    based on their custom format score.
+
+    Args:
+        config (dict): Configuration for the Sonarr instance.
+        search_history (dict): A history of recently searched items.
+        cooldown_seconds (int): The minimum time in seconds before an item can be searched again.
+        debug_mode (bool): If True, saves a detailed list of all processed items.
+
+    Returns:
+        tuple: A tuple containing the ArrService instance and a list of upgradeable items.
+    """
     url = config['url']
     logger.info(f"--- Processing Sonarr instance: {url} ---")
     service = ArrService(url, config['api_key'])
@@ -187,6 +276,7 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
         return service, upgradeable_items
 
     for series in all_series:
+        # Skip series that have no downloaded episodes.
         if series.get("statistics", {}).get("episodeFileCount", 0) == 0:
             logger.debug(f"Skipping series '{series['title']}' (no files).")
             continue
@@ -196,6 +286,7 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
             logger.debug(f"Skipping series '{series['title']}' (no valid cutoff score in quality profile).")
             continue
 
+        # Fetch all episode files for the series to check their scores.
         all_episode_files = service._get("episodefile", params={"seriesId": series["id"]})
         if not all_episode_files:
             continue
@@ -206,6 +297,8 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
             current_score = episode_file.get("customFormatScore", 0)
 
             if current_score < cutoff_score:
+                # The episode file object doesn't contain monitoring status or full title info,
+                # so we must fetch the full episode record.
                 episode_list = service._get("episode", params={"episodeFileId": episode_file["id"]})
                 if not episode_list:
                     logger.debug(f"Could not find matching episode for file ID {episode_file['id']}. Skipping.")
@@ -217,6 +310,7 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
                 if episode.get("monitored"):
                     history_key = f"sonarr-{episode['id']}"
                     last_searched_timestamp = search_history.get(history_key)
+                    # Ensure the episode hasn't been searched recently.
                     if not (last_searched_timestamp and (time.time() - last_searched_timestamp) < cooldown_seconds):
                         upgradeable = True
                         upgradeable_items.append({
@@ -230,7 +324,8 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
                     logger.debug(f"Skipping unmonitored episode: {title}")
             
             if debug_mode:
-                if episode is None: # Fetch episode data if we don't have it yet
+                # For debug logging, we may need to fetch episode details even if not upgrading.
+                if episode is None:
                     episode_list = service._get("episode", params={"episodeFileId": episode_file["id"]})
                     if episode_list:
                         episode = episode_list[0]
@@ -254,7 +349,8 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
                 })
 
     if debug_mode:
-        debug_file_path = "/config/sonarr_debug_list.json"
+        instance_name = config['instance_name']
+        debug_file_path = f"/config/sonarr_debug_list_{instance_name}.json"
         logger.info(f"Saving Sonarr debug list to {debug_file_path}")
         try:
             with open(debug_file_path, 'w') as f:
@@ -266,7 +362,17 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
     return service, upgradeable_items
 
 def load_configs(service_name):
-    """Loads all configurations for a given service (e.g., 'RADARR', 'SONARR')."""
+    """
+    Loads all configurations for a given service type (e.g., 'RADARR', 'SONARR')
+    from environment variables. It looks for variables in the format:
+    {SERVICE_NAME}{INDEX}_{VARIABLE}, e.g., RADARR0_URL, RADARR0_API_KEY.
+
+    Args:
+        service_name (str): The service to load configs for ('RADARR' or 'SONARR').
+
+    Returns:
+        list: A list of configuration dictionaries for the specified service.
+    """
     configs = []
     i = 0
     while True:
@@ -274,14 +380,15 @@ def load_configs(service_name):
         url = os.getenv(f"{prefix}_URL")
         api_key = os.getenv(f"{prefix}_API_KEY")
 
-        if not all([url, api_key]): # URL and API key are mandatory
-            break  # Stop when we can't find a complete set of variables
+        # A URL and API key are the minimum requirements for a configuration.
+        if not all([url, api_key]):
+            break  # Stop searching for configs when a complete set isn't found.
 
         num_to_upgrade_str = os.getenv(f"{prefix}_NUM_TO_UPGRADE")
         
         try:
             if num_to_upgrade_str is None:
-                # Default to no limit if the variable is not set
+                # Default to no limit if the variable is not set.
                 instance_limit = sys.maxsize
             else:
                 limit_val = int(num_to_upgrade_str)
@@ -289,19 +396,18 @@ def load_configs(service_name):
                     logger.info(f"NUM_TO_UPGRADE for {prefix} is 0. This instance will be skipped.")
                     i += 1
                     continue
-                # A negative value means no limit for this instance
+                # A negative value signifies no limit for this specific instance.
                 instance_limit = sys.maxsize if limit_val < 0 else limit_val
         except (ValueError, TypeError):
             logger.warning(f"Invalid NUM_TO_UPGRADE value '{num_to_upgrade_str}' for {prefix}. Treating as unlimited.")
             instance_limit = sys.maxsize
         
-        # Determine service type from the variable group name ('RADARR' or 'SONARR')
-        # This is more reliable than inferring from the URL.
         config = {
             "url": url,
             "api_key": api_key,
             "num_to_upgrade": instance_limit,
-            "service_type": service_name.lower()
+            "service_type": service_name.lower(),
+            "instance_name": prefix
         }
         configs.append(config)
         
@@ -312,8 +418,17 @@ def load_configs(service_name):
     return configs
 
 def trigger_grouped_searches(items_to_search, search_history, dry_run=False):
-    """Groups items by service and triggers the appropriate search commands."""
+    """
+    Groups items by their service instance and triggers the appropriate search commands.
+    This batching is more efficient than sending one search request per item.
+
+    Args:
+        items_to_search (list): A list of items to be searched.
+        search_history (dict): The search history object to be updated.
+        dry_run (bool): If True, logs actions without sending commands or updating history.
+    """
     searches_by_service = {}
+    # Group items by the service instance they belong to.
     for item in items_to_search:
         service = item['service']
         if service not in searches_by_service:
@@ -324,7 +439,8 @@ def trigger_grouped_searches(items_to_search, search_history, dry_run=False):
         elif item['type'] == 'episode':
             searches_by_service[service]['episodes'].append(item)
 
-    # If not a dry run, update the history for all items about to be searched
+    # Update the history before triggering the search to ensure items aren't
+    # immediately re-queued if the script runs again quickly.
     if not dry_run:
         update_history(items_to_search, search_history)
 
@@ -342,7 +458,16 @@ def trigger_grouped_searches(items_to_search, search_history, dry_run=False):
             service.trigger_search("EpisodeSearch", "episodeIds", [e['id'] for e in items['episodes']], dry_run)
 
 def load_history(cooldown_seconds):
-    """Loads the search history from the JSON file and prunes old entries."""
+    """
+    Loads the search history from a JSON file and prunes entries that are older
+    than the configured cooldown period.
+
+    Args:
+        cooldown_seconds (int): The time in seconds to keep an item in history.
+
+    Returns:
+        dict: The pruned search history.
+    """
     try:
         with open(HISTORY_FILE, 'r') as f:
             history = json.load(f)
@@ -350,7 +475,7 @@ def load_history(cooldown_seconds):
         logger.info("No valid search history found. Starting fresh.")
         return {}
 
-    # Prune old entries that are past the cooldown period.
+    # Prune old entries to keep the history file from growing indefinitely.
     now = time.time()
     pruned_history = {
         key: timestamp for key, timestamp in history.items()
@@ -364,7 +489,12 @@ def load_history(cooldown_seconds):
     return pruned_history
 
 def save_history(history_data):
-    """Saves the search history to the JSON file."""
+    """
+    Saves the provided search history data to the JSON file.
+
+    Args:
+        history_data (dict): The search history to save.
+    """
     try:
         with open(HISTORY_FILE, 'w') as f:
             json.dump(history_data, f, indent=4)
@@ -372,15 +502,24 @@ def save_history(history_data):
         logger.error(f"Failed to save search history to {HISTORY_FILE}: {e}")
 
 def update_history(searched_items, search_history):
-    """Updates the history with the items that were just searched."""
+    """
+    Updates the search history with the items that were just searched.
+
+    Args:
+        searched_items (list): The list of items that have been queued for search.
+        search_history (dict): The current search history object to update.
+    """
     for item in searched_items:
-        search_history[f"{item['service_type']}-{item['id']}"] = time.time() # e.g., "radarr-123" or "sonarr-456"
+        # Create a unique key for each item based on its service type and ID.
+        search_history[f"{item['service_type']}-{item['id']}"] = time.time()
 
 def main():
     """Main execution function."""
     logger.info("======================================================")
     logger.info("Starting Custom Format Search script")
 
+    # --- Configuration Loading ---
+    # Load all settings from environment variables, providing sensible defaults.
     dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
     if dry_run:
         logger.info("DRY RUN is enabled. No actual search commands will be sent.")
@@ -392,69 +531,65 @@ def main():
     try:
         cooldown_days = int(os.getenv("HISTORY_COOLDOWN_DAYS", "30"))
         if cooldown_days < 0:
-            cooldown_days = 0
+            cooldown_days = 0 # A negative cooldown is not logical.
     except ValueError:
         cooldown_days = 30
     cooldown_seconds = cooldown_days * 86400
     logger.info(f"Search history cooldown is set to {cooldown_days} days.")
 
-    delay_str = os.getenv("DELAY_BETWEEN_INSTANCES", "10")
     try:
-        DELAY_BETWEEN_INSTANCES = int(delay_str)
-        if DELAY_BETWEEN_INSTANCES < 0:
-            logger.warning(f"Invalid DELAY_BETWEEN_INSTANCES value '{delay_str}'. Using 0.")
-            DELAY_BETWEEN_INSTANCES = 0
+        delay_between_instances = int(os.getenv("DELAY_BETWEEN_INSTANCES", "10"))
+        if delay_between_instances < 0:
+            logger.warning(f"Invalid DELAY_BETWEEN_INSTANCES. Using 0.")
+            delay_between_instances = 0
     except ValueError:
-        logger.warning(f"Invalid DELAY_BETWEEN_INSTANCES value '{delay_str}'. Using default of 10.")
-        DELAY_BETWEEN_INSTANCES = 10
+        logger.warning(f"Invalid DELAY_BETWEEN_INSTANCES. Using default of 10.")
+        delay_between_instances = 10
 
-    max_upgrades_str = os.getenv("MAX_UPGRADES", "20")
     try:
-        MAX_UPGRADES = int(max_upgrades_str)
-        if MAX_UPGRADES < 0:
+        max_upgrades = int(os.getenv("MAX_UPGRADES", "20"))
+        if max_upgrades < 0:
             # A negative global limit is treated as no limit.
-            MAX_UPGRADES = sys.maxsize
+            max_upgrades = sys.maxsize
             logger.info("MAX_UPGRADES is negative, disabling global limit.")
     except ValueError:
-        logger.warning(f"Invalid MAX_UPGRADES value '{max_upgrades_str}'. Disabling global limit.")
-        MAX_UPGRADES = sys.maxsize
+        logger.warning(f"Invalid MAX_UPGRADES value. Disabling global limit.")
+        max_upgrades = sys.maxsize
 
-    logger.info(f"Global upgrade limit is set to {MAX_UPGRADES if MAX_UPGRADES != sys.maxsize else 'unlimited'}.")
+    logger.info(f"Global upgrade limit is set to {max_upgrades if max_upgrades != sys.maxsize else 'unlimited'}.")
 
-    # Combine all configs into a single list for sequential processing
-    radarr_configs = load_configs("RADARR")
-    sonarr_configs = load_configs("SONARR")
-    all_configs = radarr_configs + sonarr_configs
-
-    # Load history at the start of the run
+    # --- Main Processing Loop ---
+    all_configs = load_configs("RADARR") + load_configs("SONARR")
     search_history = load_history(cooldown_seconds)
 
-    if MAX_UPGRADES == 0:
+    if max_upgrades == 0:
         logger.info("MAX_UPGRADES is set to 0. No searches will be performed.")
-        all_configs = [] # Clear configs to prevent any processing
+        all_configs = [] # Clear configs to prevent any processing.
 
-    remaining_global_upgrades = MAX_UPGRADES
+    remaining_global_upgrades = max_upgrades
 
-    for i, config in enumerate(all_configs):        
-        # Determine the correct function to call based on the service name in the URL
+    for i, config in enumerate(all_configs):
+        # Determine the correct function to call based on the service type.
         get_upgradeables_func = get_radarr_upgradeables if config['service_type'] == 'radarr' else get_sonarr_upgradeables
         
         service, items = get_upgradeables_func(config, search_history, cooldown_seconds, debug_mode)
+        
         if not items:
-            # If there are no items, we might still need to delay before the next instance.
-            if DELAY_BETWEEN_INSTANCES > 0 and i < len(all_configs) - 1:
-                logger.info(f"Waiting for {DELAY_BETWEEN_INSTANCES} seconds before processing next instance...")
+            if delay_between_instances > 0 and i < len(all_configs) - 1:
+                logger.info(f"Waiting for {delay_between_instances} seconds before processing next instance...")
                 if not dry_run:
-                    time.sleep(DELAY_BETWEEN_INSTANCES)
+                    time.sleep(delay_between_instances)
             continue
 
-        # Apply instance and global limits
+        # Apply both instance-specific and global upgrade limits.
         instance_limit = config['num_to_upgrade']
         num_to_select = min(len(items), instance_limit, remaining_global_upgrades)
         
+        # Randomly sample from the list of upgradeable items to avoid always
+        # picking the same items if the list is long.
         items_to_search = random.sample(items, k=num_to_select)
 
-        # Add the service object to each item so it can be used for grouping.
+        # Attach service and type information to each item for later use.
         for item in items_to_search:
             item['service'] = service
             item['service_type'] = config['service_type']
@@ -463,17 +598,18 @@ def main():
 
         trigger_grouped_searches(items_to_search, search_history, dry_run=dry_run)
         
-        # Check if the global limit has been reached and break for the next run.
+        # Stop processing if the global upgrade limit for this run has been reached.
         if remaining_global_upgrades <= 0:
-            logger.info(f"Global upgrade limit of {MAX_UPGRADES} reached. No more instances will be processed in this run.")
+            logger.info(f"Global upgrade limit of {max_upgrades} reached. No more instances will be processed in this run.")
             break
 
-        if DELAY_BETWEEN_INSTANCES > 0 and i < len(all_configs) - 1:
-            logger.info(f"Waiting for {DELAY_BETWEEN_INSTANCES} seconds before processing next instance...")
+        # Pause between processing instances to be respectful to APIs.
+        if delay_between_instances > 0 and i < len(all_configs) - 1:
+            logger.info(f"Waiting for {delay_between_instances} seconds before processing next instance...")
             if not dry_run:
-                time.sleep(DELAY_BETWEEN_INSTANCES)
+                time.sleep(delay_between_instances)
 
-    # Save the updated history at the end of the run
+    # Persist the updated history to disk at the end of the run.
     if not dry_run:
         save_history(search_history)
 
