@@ -97,6 +97,18 @@ You can also define all configuration variables directly in your `docker-compose
           - /path/to/your/config:/config
     ```
 
+## Manual Trigger
+
+If you want to run the script on-demand without waiting for the `CRON_SCHEDULE`, you can execute it manually inside the running container. This is useful for testing your configuration or forcing an immediate scan.
+
+Make sure the container is running, then execute the following command:
+
+```bash
+docker exec -it cf-search python /app/app.py
+```
+
+This command will run the script immediately and output the logs directly to your terminal. It will respect all the environment variables you have configured, including `DRY_RUN`, `MAX_UPGRADES`, etc.
+
 ## Acknowledgements
 
 This project was originally forked from TheHesster/radarr-cf-search. A big thank you to the original author for creating the foundation of this utility.
