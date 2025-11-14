@@ -32,8 +32,11 @@ DEBUG_MODE=false
 RADARR0_URL="http://192.168.0.100:7878"
 # API Key for this Radarr instance.
 RADARR0_API_KEY="your_radarr0_api_key_here"
-# The maximum number of movies to search for from THIS instance per run.
-# Set to 0 to disable this instance. Leave unset or set to a negative number for no limit on this instance.
+# The max number of movies to search for from THIS instance that have not met their quality cutoff.
+# Defaults to 0 if not set (opt-in). Set to 0 to disable this type of search. A negative number means no limit.
+RADARR0_NUM_CUTOFF_UNMET_TO_UPGRADE=5
+# The max number of movies to search for from THIS instance based on Custom Format score.
+# Defaults to unlimited if not set. Set to 0 to disable this type of search.
 RADARR0_NUM_TO_UPGRADE=5
 
 # --- Radarr Instance 1 (Optional Example, e.g., 4K Radarr) ---
@@ -47,10 +50,15 @@ RADARR0_NUM_TO_UPGRADE=5
 SONARR0_URL="http://192.168.0.100:8989"
 # API Key for this Sonarr instance.
 SONARR0_API_KEY="your_sonarr0_api_key_here"
-# The maximum number of episodes to search for from THIS instance per run.
+# The max number of episodes to search for from THIS instance that have not met their quality cutoff.
+# Defaults to 0 if not set (opt-in). Set to 0 to disable this type of search. A negative number means no limit.
+SONARR0_NUM_CUTOFF_UNMET_TO_UPGRADE=5
+# The max number of episodes to search for from THIS instance based on Custom Format score.
+# Defaults to unlimited if not set. Set to 0 to disable this type of search.
 SONARR0_NUM_TO_UPGRADE=10
 
 # --- Sonarr Instance 1 (Optional Example, e.g., Anime Sonarr) ---
 # SONARR1_URL="http://192.168.0.102:8989"
 # SONARR1_API_KEY="your_sonarr1_api_key_here"
+# SONARR1_NUM_CUTOFF_UNMET_TO_UPGRADE=2
 # SONARR1_NUM_TO_UPGRADE=3

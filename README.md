@@ -1,10 +1,13 @@
 # Custom Format Search for Radarr & Sonarr
 
-This is a Python script, run via Docker, that looks through your Radarr and Sonarr libraries. It finds media that has not met the "Custom Format Cutoff Score" defined in your quality profiles and triggers a search for a random selection of them, helping you to automatically upgrade your library over time.
+This is a Python script, run via Docker, that looks through your Radarr and Sonarr libraries to find opportunities for quality upgrades and triggers searches for them.
+
+For **Radarr**, it first searches for movies that have not met their quality profile's cutoff (`qualityCutoffNotMet`). After that, it looks for movies that are below the "Custom Format Cutoff Score". For **Sonarr**, it finds episodes that are below their profile's "Custom Format Cutoff Score". The script then triggers a search for a random selection of these items, helping you to automatically upgrade your library over time.
 
 ## Features
 
--   **Automated Upgrades:** Periodically scans your libraries to find and search for media that falls below your defined custom format score.
+-   **Automated Upgrades:** Periodically scans your libraries to find and search for media that falls below your defined quality or custom format score cutoffs.
+-   **Prioritized Radarr Upgrades:** First triggers searches for movies that haven't met their quality profile's cutoff, then moves on to movies that can be upgraded based on custom format scores.
 -   **Multi-Instance Support:** Connect to and manage multiple Radarr and Sonarr instances from a single container.
 -   **Granular Control:** Set both a global cap (`MAX_UPGRADES`) and per-instance limits (`*_NUM_TO_UPGRADE`) on the number of searches per run.
 -   **Safe Testing:** Use the `DRY_RUN` mode to see what the script would do without sending any actual search commands.
@@ -26,10 +29,12 @@ The script is configured using environment variables. These can be placed in a `
 | `HISTORY_COOLDOWN_DAYS` | The number of days to wait before an item can be searched for again. Prevents the script from repeatedly searching for the same media. | `30` |
 | `RADARR{n}_URL` | URL for the Radarr instance (e.g., `RADARR0_URL`, `RADARR1_URL`). | (none) |
 | `RADARR{n}_API_KEY` | API Key for the corresponding Radarr instance. | (none) |
-| `RADARR{n}_NUM_TO_UPGRADE` | The maximum number of movies to search for from THIS instance per run. Set to `0` to disable. Leave unset or set to a negative number for no limit. | `5` |
+| `RADARR{n}_NUM_CUTOFF_UNMET_TO_UPGRADE` | The max number of movies to search for from THIS instance that have **not met their quality cutoff**. Set to `0` to disable this type of search. A negative number means no limit. | `0` |
+| `RADARR{n}_NUM_TO_UPGRADE` | The max number of movies to search for from THIS instance based on **Custom Format score**. Set to `0` to disable this type of search. Leave unset or set to a negative number for no limit. | (unlimited) |
 | `SONARR{n}_URL` | URL for the Sonarr instance (e.g., `SONARR0_URL`, `SONARR1_URL`). | (none) |
 | `SONARR{n}_API_KEY` | API Key for the corresponding Sonarr instance. | (none) |
-| `SONARR{n}_NUM_TO_UPGRADE` | The maximum number of episodes to search for from THIS instance per run. Set to `0` to disable. Leave unset or set to a negative number for no limit. | `10` |
+| `SONARR{n}_NUM_CUTOFF_UNMET_TO_UPGRADE` | The max number of episodes to search for from THIS instance that have **not met their quality cutoff**. Set to `0` to disable this type of search. A negative number means no limit. | `0` |
+| `SONARR{n}_NUM_TO_UPGRADE` | The max number of episodes to search for from THIS instance based on **Custom Format score**. Set to `0` to disable this type of search. Leave unset or set to a negative number for no limit. | (unlimited) |
 
 ## Setup Instructions
 
@@ -87,11 +92,13 @@ You can also define all configuration variables directly in your `docker-compose
           # --- Radarr Instance 0 ---
           - RADARR0_URL=http://192.168.0.100:7878
           - RADARR0_API_KEY=your_radarr0_api_key_here
-          - RADARR0_NUM_TO_UPGRADE=5
+          - RADARR0_NUM_CUTOFF_UNMET_TO_UPGRADE=5 # Prioritize searching for up to 5 movies that haven't met their quality cutoff
+          - RADARR0_NUM_TO_UPGRADE=2 # Then, search for up to 2 movies for CF score upgrades
           # --- Sonarr Instance 0 ---
           - SONARR0_URL=http://192.168.0.100:8989
           - SONARR0_API_KEY=your_sonarr0_api_key_here
-          - SONARR0_NUM_TO_UPGRADE=10
+          - SONARR0_NUM_CUTOFF_UNMET_TO_UPGRADE=5 # Prioritize searching for up to 5 episodes that haven't met their quality cutoff
+          - SONARR0_NUM_TO_UPGRADE=5 # Then, search for up to 5 episodes for CF score upgrades
         volumes:
           # A volume is still needed for persistent logging.
           - /path/to/your/config:/config

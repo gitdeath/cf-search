@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-This script automates the process of finding and triggering upgrades for media
-in Radarr and Sonarr instances based on custom format scores.
+This script automates media library upgrades for Radarr and Sonarr.
 
 It periodically scans the libraries of configured Radarr and Sonarr instances,
-identifies media items that have a custom format score lower than the configured
-quality profile's cutoff score, and triggers a search for better-quality versions.
+identifies items that have not met their quality profile's cutoff, and then
+finds items that are below the profile's custom format score. It then triggers
+searches for a limited number of these items to find better-quality versions.
 
 The script is configured entirely through environment variables and is designed
-to be run in a containerized environment. It maintains a history of searched
-items to avoid re-searching the same item within a configurable cooldown period.
+to be run in a container. It maintains a history of searched items to avoid
+re-searching the same item within a configurable cooldown period, preventing
+API spam.
 """
 import logging
 import os
@@ -100,18 +101,34 @@ class ArrService:
             logger.error(f"API POST request to {self.url}/api/v3/{endpoint} failed: {e}")
             return None
 
-    def get_quality_profile_scores(self):
+    def get_quality_profile_details(self):
         """
-        Fetches all quality profiles and maps their IDs to their cutoff format scores.
-        This is crucial for determining if an item is upgradeable.
+        Fetches all quality profiles and maps their IDs to their cutoff details.
+        This is crucial for determining if an item is upgradeable based on score or quality.
 
         Returns:
-            dict: A mapping of quality profile IDs (int) to cutoff scores (int).
+            dict: A mapping of quality profile IDs to a dict containing
+                  'cutoffFormatScore' and 'cutoffQualityName'.
         """
         profiles = self._get("qualityprofile")
         if profiles is None:
             return {}
-        return {profile["id"]: profile["cutoffFormatScore"] for profile in profiles}
+        
+        profile_details = {}
+        for profile in profiles:
+            cutoff_quality_id = profile.get("cutoff")
+            cutoff_quality_name = "N/A"
+            # Find the name of the cutoff quality by iterating through the profile's items
+            for item in profile.get("items", []):
+                if item.get("quality", {}).get("id") == cutoff_quality_id:
+                    cutoff_quality_name = item["quality"]["name"]
+                    break
+            
+            profile_details[profile["id"]] = {
+                "cutoffFormatScore": profile.get("cutoffFormatScore"),
+                "cutoffQualityName": cutoff_quality_name
+            }
+        return profile_details
 
     def test_connection(self):
         """
@@ -155,8 +172,9 @@ class ArrService:
 
 def get_radarr_upgradeables(config, search_history, cooldown_seconds, debug_mode=False):
     """
-    Scans a Radarr instance to find all movies that are eligible for an upgrade
-    based on their custom format score.
+    Scans a Radarr instance to find movies eligible for an upgrade. It prioritizes
+    movies that have not met their quality profile's cutoff, then looks for
+    movies that can be upgraded based on custom format score.
 
     Args:
         config (dict): Configuration for the Radarr instance.
@@ -165,67 +183,106 @@ def get_radarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
         debug_mode (bool): If True, saves a detailed list of all processed items.
 
     Returns:
-        tuple: A tuple containing the ArrService instance and a list of upgradeable items.
+        tuple: A tuple containing the ArrService instance, a list of "cutoff unmet"
+               items, and a list of "custom format score" upgradeable items.
     """
     url = config['url']
     logger.info(f"--- Processing Radarr instance: {url} ---")
     service = ArrService(url, config['api_key'])
-    upgradeable_items = []
+    cutoff_unmet_items = []
+    cf_upgradeable_items = []
     debug_data = []
 
     if not service.test_connection():
         logger.error(f"Could not connect to Radarr instance at {url}. Check URL and API Key. Skipping.")
-        return service, upgradeable_items
+        return service, [], []
 
-    quality_scores = service.get_quality_profile_scores()
-    if not quality_scores:
+    quality_profile_details = service.get_quality_profile_details()
+    if not quality_profile_details:
         logger.error("Could not fetch quality profiles. Aborting for this instance.")
-        return service, upgradeable_items
+        return service, [], []
 
     all_movies = service._get("movie")
     if all_movies is None:
         logger.error("Could not fetch movies. Aborting for this instance.")
-        return service, upgradeable_items
+        return service, [], []
 
     for movie in all_movies:
         upgradeable = False
+        upgrade_reason = ""
         current_score = "N/A"
-        cutoff_score = quality_scores.get(movie["qualityProfileId"])
+        current_quality = "N/A"
+        
+        profile_id = movie.get("qualityProfileId")
+        profile_info = quality_profile_details.get(profile_id, {})
+        cutoff_score = profile_info.get("cutoffFormatScore")
+        cutoff_quality = profile_info.get("cutoffQualityName", "N/A")
 
         # Only consider movies that are monitored and have an associated file.
-        if movie.get("monitored") and movie.get("movieFileId", 0) > 0:
-            # The main movie endpoint doesn't include the file's custom format score,
-            # so a separate call to the moviefile endpoint is required.
-            movie_file = service._get(f"moviefile/{movie['movieFileId']}")
-            if not movie_file:
-                logger.debug(f"Could not retrieve movie file details for '{movie['title']}'. Skipping.")
-                continue
+        if not (movie.get("monitored") and movie.get("hasFile")):
+            if debug_mode:
+                debug_data.append({
+                    "title": movie["title"], "monitored": movie.get("monitored"), "hasFile": movie.get("hasFile"),
+                    "qualityCutoffNotMet": False, # Cannot be met if there is no file
+                    "current_quality": "N/A",
+                    "cutoff_quality": cutoff_quality,
+                    "current_score": "N/A", "cutoff_score": cutoff_score, "upgradeable": False, "reason": "Not monitored or no file"
+                })
+            continue
 
-            current_score = movie_file.get("customFormatScore", 0)
+        history_key = f"radarr-{movie['id']}"
+        last_searched_timestamp = search_history.get(history_key)
+        if last_searched_timestamp and (time.time() - last_searched_timestamp) < cooldown_seconds:
+            logger.debug(f"Skipping recently searched movie: {movie['title']}")
+            continue
 
-            # Check if the current score is below the profile's cutoff.
-            if cutoff_score is not None and current_score < cutoff_score:
-                history_key = f"radarr-{movie['id']}"
-                last_searched_timestamp = search_history.get(history_key)
-                # Ensure the movie hasn't been searched recently to avoid spamming trackers.
-                if not (last_searched_timestamp and (time.time() - last_searched_timestamp) < cooldown_seconds):
+        # Fetch movie file details to check for upgrades
+        movie_file = service._get(f"moviefile/{movie['movieFileId']}")
+        if movie_file:
+            if debug_mode:
+                current_quality = movie_file.get("quality", {}).get("quality", {}).get("name", "N/A")
+            
+            # Priority 1: Check if the quality profile cutoff has not been met.
+            # This flag is on the movieFile object, not the movie object.
+            if movie_file.get("qualityCutoffNotMet", False):
+                upgradeable = True
+                upgrade_reason = "Quality cutoff not met"
+                cutoff_unmet_items.append({
+                    "id": movie["id"],
+                    "title": f"{movie['title']} (Reason: {upgrade_reason})",
+                    "type": "movie"
+                })
+            # Priority 2: Check for custom format score upgrades.
+            elif cutoff_score is not None:
+                current_score = movie_file.get("customFormatScore", 0)
+                if current_score < cutoff_score:
                     upgradeable = True
-                    upgradeable_items.append({
+                    upgrade_reason = f"CF score {current_score} < cutoff {cutoff_score}"
+                    cf_upgradeable_items.append({
                         "id": movie["id"],
-                        "title": movie["title"],
+                        "title": f"{movie['title']} (Reason: {upgrade_reason})",
                         "type": "movie"
                     })
-                else:
-                    logger.debug(f"Skipping recently searched movie: {movie['title']}")
+        else:
+            logger.debug(f"Could not retrieve movie file details for '{movie['title']}'. Skipping upgrade checks.")
 
         if debug_mode:
+            # Fetch score for debug if not already fetched
+            if movie_file:
+                current_score = movie_file.get("customFormatScore", 0)
+                current_quality = movie_file.get("quality", {}).get("quality", {}).get("name", "N/A")
+
             debug_data.append({
                 "title": movie["title"],
                 "monitored": movie.get("monitored"),
                 "hasFile": movie.get("hasFile"),
+                "qualityCutoffNotMet": movie_file.get("qualityCutoffNotMet", False) if movie_file else False,
+                "current_quality": current_quality,
+                "cutoff_quality": cutoff_quality,
                 "current_score": current_score,
                 "cutoff_score": cutoff_score,
-                "upgradeable": upgradeable
+                "upgradeable": upgradeable,
+                "reason": upgrade_reason
             })
 
     if debug_mode:
@@ -238,13 +295,15 @@ def get_radarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
         except IOError as e:
             logger.error(f"Failed to save debug list to {debug_file_path}: {e}")
 
-    logger.info(f"Found {len(upgradeable_items)} movies that can be upgraded.")
-    return service, upgradeable_items
+    logger.info(f"Found {len(cutoff_unmet_items)} movies that have not met their quality cutoff.")
+    logger.info(f"Found {len(cf_upgradeable_items)} movies that can be upgraded based on Custom Format score.")
+    return service, cutoff_unmet_items, cf_upgradeable_items
 
 def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode=False):
     """
-    Scans a Sonarr instance to find all episodes that are eligible for an upgrade
-    based on their custom format score.
+    Scans a Sonarr instance to find episodes eligible for an upgrade. It prioritizes
+    episodes that have not met their quality profile's cutoff, then looks for
+    episodes that can be upgraded based on custom format score.
 
     Args:
         config (dict): Configuration for the Sonarr instance.
@@ -253,27 +312,29 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
         debug_mode (bool): If True, saves a detailed list of all processed items.
 
     Returns:
-        tuple: A tuple containing the ArrService instance and a list of upgradeable items.
+        tuple: A tuple containing the ArrService instance, a list of "cutoff unmet"
+               items, and a list of "custom format score" upgradeable items.
     """
     url = config['url']
     logger.info(f"--- Processing Sonarr instance: {url} ---")
     service = ArrService(url, config['api_key'])
-    upgradeable_items = []
+    cutoff_unmet_items = []
+    cf_upgradeable_items = []
     debug_data = []
 
     if not service.test_connection():
         logger.error(f"Could not connect to Sonarr instance at {url}. Check URL and API Key. Skipping.")
-        return service, upgradeable_items
+        return service, [], []
 
-    quality_scores = service.get_quality_profile_scores()
-    if not quality_scores:
+    quality_profile_details = service.get_quality_profile_details()
+    if not quality_profile_details:
         logger.error("Could not fetch quality profiles. Aborting for this instance.")
-        return service, upgradeable_items
+        return service, [], []
 
     all_series = service._get("series")
     if all_series is None:
         logger.error("Could not fetch series. Aborting for this instance.")
-        return service, upgradeable_items
+        return service, [], []
 
     for series in all_series:
         # Skip series that have no downloaded episodes.
@@ -281,7 +342,8 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
             logger.debug(f"Skipping series '{series['title']}' (no files).")
             continue
 
-        cutoff_score = quality_scores.get(series["qualityProfileId"])
+        profile_info = quality_profile_details.get(series["qualityProfileId"], {})
+        cutoff_score = profile_info.get("cutoffFormatScore")
         if cutoff_score is None:
             logger.debug(f"Skipping series '{series['title']}' (no valid cutoff score in quality profile).")
             continue
@@ -293,60 +355,62 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
 
         for episode_file in all_episode_files:
             upgradeable = False
+            upgrade_reason = ""
             episode = None # Will hold the episode data if fetched
             current_score = episode_file.get("customFormatScore", 0)
 
-            if current_score < cutoff_score:
-                # The episode file object doesn't contain monitoring status or full title info,
-                # so we must fetch the full episode record.
-                episode_list = service._get("episode", params={"episodeFileId": episode_file["id"]})
-                if not episode_list:
-                    logger.debug(f"Could not find matching episode for file ID {episode_file['id']}. Skipping.")
-                    continue
-                
-                episode = episode_list[0]
-                title = f"{series['title']} - S{episode['seasonNumber']:02d}E{episode['episodeNumber']:02d} - {episode.get('title', 'N/A')}"
-
-                if episode.get("monitored"):
-                    history_key = f"sonarr-{episode['id']}"
-                    last_searched_timestamp = search_history.get(history_key)
-                    # Ensure the episode hasn't been searched recently.
-                    if not (last_searched_timestamp and (time.time() - last_searched_timestamp) < cooldown_seconds):
-                        upgradeable = True
-                        upgradeable_items.append({
-                            "id": episode["id"],
-                            "title": title,
-                            "type": "episode",
-                        })
-                    else:
-                        logger.debug(f"Skipping recently searched episode: {title}")
-                else:
-                    logger.debug(f"Skipping unmonitored episode: {title}")
+            # The episode file endpoint doesn't include monitoring status, so a separate
+            # API call is required to get the full episode details.
+            episode_list = service._get("episode", params={"episodeFileId": episode_file["id"]})
+            if not episode_list:
+                logger.debug(f"Could not find matching episode for file ID {episode_file['id']}. Skipping.")
+                continue
             
-            if debug_mode:
-                # For debug logging, we may need to fetch episode details even if not upgrading.
-                if episode is None:
-                    episode_list = service._get("episode", params={"episodeFileId": episode_file["id"]})
-                    if episode_list:
-                        episode = episode_list[0]
+            episode = episode_list[0]
+            title = f"{series['title']} - S{episode['seasonNumber']:02d}E{episode['episodeNumber']:02d} - {episode.get('title', 'N/A')}"
 
-                title = "Unknown Episode"
-                episode_monitored = "Unknown"
-                has_file = False
-                if episode:
-                    title = f"{series['title']} - S{episode['seasonNumber']:02d}E{episode['episodeNumber']:02d} - {episode.get('title', 'N/A')}"
-                    episode_monitored = episode.get("monitored")
-                    has_file = episode.get("hasFile")
+            if not episode.get("monitored"):
+                logger.debug(f"Skipping unmonitored episode: {title}")
+                continue
 
-                debug_data.append({
-                    "title": title,
-                    "series_monitored": series.get("monitored"),
-                    "episode_monitored": episode_monitored,
-                    "hasFile": has_file,
-                    "current_score": current_score,
-                    "cutoff_score": cutoff_score,
-                    "upgradeable": upgradeable
+            history_key = f"sonarr-{episode['id']}"
+            last_searched_timestamp = search_history.get(history_key)
+            if last_searched_timestamp and (time.time() - last_searched_timestamp) < cooldown_seconds:
+                logger.debug(f"Skipping recently searched episode: {title}")
+                continue
+
+            # Priority 1: Check if the quality profile cutoff has not been met.
+            if episode_file.get("qualityCutoffNotMet", False):
+                upgradeable = True
+                upgrade_reason = "Quality cutoff not met"
+                cutoff_unmet_items.append({
+                    "id": episode["id"],
+                    "title": f"{title} (Reason: {upgrade_reason})",
+                    "type": "episode",
                 })
+            # Priority 2: Check for custom format score upgrades.
+            elif cutoff_score is not None and current_score < cutoff_score:
+                upgradeable = True
+                upgrade_reason = f"CF score {current_score} < cutoff {cutoff_score}"
+                cf_upgradeable_items.append({
+                    "id": episode["id"],
+                    "title": f"{title} (Reason: {upgrade_reason})",
+                    "type": "episode",
+                })
+
+            if debug_mode:
+                if episode:
+                    debug_data.append({
+                        "title": title,
+                        "series_monitored": series.get("monitored"),
+                        "episode_monitored": episode.get("monitored"),
+                        "hasFile": episode.get("hasFile"),
+                        "qualityCutoffNotMet": episode_file.get("qualityCutoffNotMet", False),
+                        "current_score": current_score,
+                        "cutoff_score": cutoff_score,
+                        "upgradeable": upgradeable,
+                        "reason": upgrade_reason
+                    })
 
     if debug_mode:
         instance_name = config['instance_name']
@@ -358,8 +422,9 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
         except IOError as e:
             logger.error(f"Failed to save debug list to {debug_file_path}: {e}")
 
-    logger.info(f"Found {len(upgradeable_items)} episodes that can be upgraded.")
-    return service, upgradeable_items
+    logger.info(f"Found {len(cutoff_unmet_items)} episodes that have not met their quality cutoff.")
+    logger.info(f"Found {len(cf_upgradeable_items)} episodes that can be upgraded based on Custom Format score.")
+    return service, cutoff_unmet_items, cf_upgradeable_items
 
 def load_configs(service_name):
     """
@@ -393,15 +458,27 @@ def load_configs(service_name):
             else:
                 limit_val = int(num_to_upgrade_str)
                 if limit_val == 0:
-                    logger.info(f"NUM_TO_UPGRADE for {prefix} is 0. This instance will be skipped.")
-                    i += 1
-                    continue
-                # A negative value signifies no limit for this specific instance.
+                    logger.info(f"NUM_TO_UPGRADE for {prefix} is 0. Custom Format score upgrades will be skipped for this instance.")
                 instance_limit = sys.maxsize if limit_val < 0 else limit_val
         except (ValueError, TypeError):
             logger.warning(f"Invalid NUM_TO_UPGRADE value '{num_to_upgrade_str}' for {prefix}. Treating as unlimited.")
             instance_limit = sys.maxsize
         
+        # Load cutoff unmet limit (applies to both Radarr and Sonarr)
+        instance_cutoff_limit = 0 # Default to 0 if not specified
+        num_cutoff_unmet_str = os.getenv(f"{prefix}_NUM_CUTOFF_UNMET_TO_UPGRADE")
+        try:
+            if num_cutoff_unmet_str is None:
+                pass # Keep the default of 0
+            else:
+                limit_val = int(num_cutoff_unmet_str)
+                if limit_val == 0:
+                    logger.info(f"NUM_CUTOFF_UNMET_TO_UPGRADE for {prefix} is 0. This type of upgrade will be skipped for this instance.")
+                instance_cutoff_limit = sys.maxsize if limit_val < 0 else limit_val
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid NUM_CUTOFF_UNMET_TO_UPGRADE value '{num_cutoff_unmet_str}' for {prefix}. Treating as unlimited.")
+            instance_cutoff_limit = sys.maxsize
+
         config = {
             "url": url,
             "api_key": api_key,
@@ -409,10 +486,13 @@ def load_configs(service_name):
             "service_type": service_name.lower(),
             "instance_name": prefix
         }
+        config["num_cutoff_unmet_to_upgrade"] = instance_cutoff_limit
+
         configs.append(config)
         
         limit_str = 'unlimited' if instance_limit == sys.maxsize else str(instance_limit)
-        logger.info(f"Loaded configuration for {prefix} (instance limit: {limit_str})")
+        cutoff_limit_str = 'unlimited' if instance_cutoff_limit == sys.maxsize else str(instance_cutoff_limit)
+        logger.info(f"Loaded configuration for {prefix} (Cutoff Unmet limit: {cutoff_limit_str}, CF Score limit: {limit_str})")
         
         i += 1
     return configs
@@ -569,32 +649,40 @@ def main():
     remaining_global_upgrades = max_upgrades
 
     for i, config in enumerate(all_configs):
-        # Determine the correct function to call based on the service type.
+        items_to_search = []
+        service = None
+
         get_upgradeables_func = get_radarr_upgradeables if config['service_type'] == 'radarr' else get_sonarr_upgradeables
+        service, cutoff_unmet_items, cf_upgradeable_items = get_upgradeables_func(config, search_history, cooldown_seconds, debug_mode)
+
+        # 1. Select items that have not met their quality cutoff
+        cutoff_limit = config['num_cutoff_unmet_to_upgrade']
+        num_to_select_cutoff = min(len(cutoff_unmet_items), cutoff_limit, remaining_global_upgrades)
+        cutoff_selected = random.sample(cutoff_unmet_items, k=num_to_select_cutoff)
+        items_to_search.extend(cutoff_selected)
         
-        service, items = get_upgradeables_func(config, search_history, cooldown_seconds, debug_mode)
+        remaining_global_upgrades -= len(cutoff_selected)
         
-        if not items:
+        # 2. Select items for custom format score upgrade
+        if remaining_global_upgrades > 0:
+            cf_limit = config['num_to_upgrade']
+            num_to_select_cf = min(len(cf_upgradeable_items), cf_limit, remaining_global_upgrades)
+            cf_selected = random.sample(cf_upgradeable_items, k=num_to_select_cf)
+            items_to_search.extend(cf_selected)
+            remaining_global_upgrades -= len(cf_selected)
+
+        if not items_to_search:
+            logger.info(f"No items to search for on instance {config['instance_name']}.")
             if delay_between_instances > 0 and i < len(all_configs) - 1:
                 logger.info(f"Waiting for {delay_between_instances} seconds before processing next instance...")
                 if not dry_run:
                     time.sleep(delay_between_instances)
             continue
 
-        # Apply both instance-specific and global upgrade limits.
-        instance_limit = config['num_to_upgrade']
-        num_to_select = min(len(items), instance_limit, remaining_global_upgrades)
-        
-        # Randomly sample from the list of upgradeable items to avoid always
-        # picking the same items if the list is long.
-        items_to_search = random.sample(items, k=num_to_select)
-
         # Attach service and type information to each item for later use.
         for item in items_to_search:
-            item['service'] = service
+            item['service'] = service # service is guaranteed to be set if items_to_search is not empty
             item['service_type'] = config['service_type']
-
-        remaining_global_upgrades -= len(items_to_search)
 
         trigger_grouped_searches(items_to_search, search_history, dry_run=dry_run)
         
