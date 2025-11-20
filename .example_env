@@ -38,6 +38,9 @@ RADARR0_NUM_CUTOFF_UNMET_TO_UPGRADE=5
 # The max number of movies to search for from THIS instance based on Custom Format score.
 # Defaults to unlimited if not set. Set to 0 to disable this type of search.
 RADARR0_NUM_TO_UPGRADE=5
+# The maximum number of items allowed in the queue before skipping searches for this instance.
+# If the queue size is greater than or equal to this limit, the instance is skipped.
+# RADARR0_QUEUE_SIZE_LIMIT=100
 
 # --- Radarr Instance 1 (Optional Example, e.g., 4K Radarr) ---
 # To add more instances, increment the number (e.g., RADARR1, RADARR2, etc.).
@@ -56,6 +59,9 @@ SONARR0_NUM_CUTOFF_UNMET_TO_UPGRADE=5
 # The max number of episodes to search for from THIS instance based on Custom Format score.
 # Defaults to unlimited if not set. Set to 0 to disable this type of search.
 SONARR0_NUM_TO_UPGRADE=10
+# The maximum number of items allowed in the queue before skipping searches for this instance.
+# If the queue size is greater than or equal to this limit, the instance is skipped.
+# SONARR0_QUEUE_SIZE_LIMIT=100
 
 # --- Sonarr Instance 1 (Optional Example, e.g., Anime Sonarr) ---
 # SONARR1_URL="http://192.168.0.102:8989"

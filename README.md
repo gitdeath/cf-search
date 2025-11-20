@@ -35,6 +35,7 @@ The script is configured using environment variables. These can be placed in a `
 | `SONARR{n}_API_KEY` | API Key for the corresponding Sonarr instance. | (none) |
 | `SONARR{n}_NUM_CUTOFF_UNMET_TO_UPGRADE` | The max number of episodes to search for from THIS instance that have **not met their quality cutoff**. Set to `0` to disable this type of search. A negative number means no limit. | `0` |
 | `SONARR{n}_NUM_TO_UPGRADE` | The max number of episodes to search for from THIS instance based on **Custom Format score**. Set to `0` to disable this type of search. Leave unset or set to a negative number for no limit. | (unlimited) |
+| `{SERVICE}{n}_QUEUE_SIZE_LIMIT` | The maximum number of items allowed in the queue before skipping searches for this instance. If the queue size is greater than or equal to this limit, the instance is skipped. | (disabled) |
 
 ## Setup Instructions
 
@@ -94,6 +95,7 @@ You can also define all configuration variables directly in your `docker-compose
           - RADARR0_API_KEY=your_radarr0_api_key_here
           - RADARR0_NUM_CUTOFF_UNMET_TO_UPGRADE=5 # Prioritize searching for up to 5 movies that haven't met their quality cutoff
           - RADARR0_NUM_TO_UPGRADE=2 # Then, search for up to 2 movies for CF score upgrades
+          - RADARR0_QUEUE_SIZE_LIMIT=100 # Skip searching if the queue has 100 or more items
           # --- Sonarr Instance 0 ---
           - SONARR0_URL=http://192.168.0.100:8989
           - SONARR0_API_KEY=your_sonarr0_api_key_here

@@ -142,6 +142,18 @@ class ArrService:
         status = self._get("system/status")
         return status is not None
 
+    def get_queue_size(self):
+        """
+        Gets the current number of items in the queue.
+
+        Returns:
+            int: The number of items in the queue, or 0 if the request fails.
+        """
+        queue = self._get("queue")
+        if queue is None:
+            return 0
+        return queue.get("totalRecords", 0)
+
     def trigger_search(self, command_name, item_ids_key, item_ids, dry_run=False):
         """
         Triggers a search command (e.g., 'MoviesSearch') for a list of item IDs.
@@ -196,6 +208,14 @@ def get_radarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
     if not service.test_connection():
         logger.error(f"Could not connect to Radarr instance at {url}. Check URL and API Key. Skipping.")
         return service, [], []
+
+    # Check queue size if a limit is configured
+    queue_limit = config.get("queue_size_limit")
+    if queue_limit is not None:
+        current_queue_size = service.get_queue_size()
+        if current_queue_size >= queue_limit:
+            logger.info(f"Queue size ({current_queue_size}) exceeds limit ({queue_limit}). Skipping this instance.")
+            return service, [], []
 
     quality_profile_details = service.get_quality_profile_details()
     if not quality_profile_details:
@@ -325,6 +345,14 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
     if not service.test_connection():
         logger.error(f"Could not connect to Sonarr instance at {url}. Check URL and API Key. Skipping.")
         return service, [], []
+
+    # Check queue size if a limit is configured
+    queue_limit = config.get("queue_size_limit")
+    if queue_limit is not None:
+        current_queue_size = service.get_queue_size()
+        if current_queue_size >= queue_limit:
+            logger.info(f"Queue size ({current_queue_size}) exceeds limit ({queue_limit}). Skipping this instance.")
+            return service, [], []
 
     quality_profile_details = service.get_quality_profile_details()
     if not quality_profile_details:
@@ -479,6 +507,19 @@ def load_configs(service_name):
             logger.warning(f"Invalid NUM_CUTOFF_UNMET_TO_UPGRADE value '{num_cutoff_unmet_str}' for {prefix}. Treating as unlimited.")
             instance_cutoff_limit = sys.maxsize
 
+        # Load queue size limit
+        queue_size_limit = None
+        queue_size_limit_str = os.getenv(f"{prefix}_QUEUE_SIZE_LIMIT")
+        if queue_size_limit_str is not None:
+            try:
+                queue_size_limit = int(queue_size_limit_str)
+                if queue_size_limit < 0:
+                    logger.warning(f"Invalid QUEUE_SIZE_LIMIT '{queue_size_limit_str}' for {prefix}. Ignoring.")
+                    queue_size_limit = None
+            except ValueError:
+                logger.warning(f"Invalid QUEUE_SIZE_LIMIT '{queue_size_limit_str}' for {prefix}. Ignoring.")
+                queue_size_limit = None
+
         config = {
             "url": url,
             "api_key": api_key,
@@ -487,12 +528,14 @@ def load_configs(service_name):
             "instance_name": prefix
         }
         config["num_cutoff_unmet_to_upgrade"] = instance_cutoff_limit
+        config["queue_size_limit"] = queue_size_limit
 
         configs.append(config)
         
         limit_str = 'unlimited' if instance_limit == sys.maxsize else str(instance_limit)
         cutoff_limit_str = 'unlimited' if instance_cutoff_limit == sys.maxsize else str(instance_cutoff_limit)
-        logger.info(f"Loaded configuration for {prefix} (Cutoff Unmet limit: {cutoff_limit_str}, CF Score limit: {limit_str})")
+        queue_limit_str = str(queue_size_limit) if queue_size_limit is not None else 'disabled'
+        logger.info(f"Loaded configuration for {prefix} (Cutoff Unmet limit: {cutoff_limit_str}, CF Score limit: {limit_str}, Queue Limit: {queue_limit_str})")
         
         i += 1
     return configs
