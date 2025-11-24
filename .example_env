@@ -4,6 +4,12 @@
 # Sets the timezone for the container, affecting cron scheduling and log timestamps.
 TZ=America/Los_Angeles
 
+# --- Scheduling ---
+# You can use CRON_SCHEDULE for full control (e.g., "0 2 * * *")
+# OR use SEARCH_INTERVAL for simplified scheduling (e.g., "1m", "3h", "2d").
+# CRON_SCHEDULE takes precedence if both are set.
+# SEARCH_INTERVAL=3h
+
 # The maximum total number of items to search for across ALL instances in a single run.
 # This acts as a global cap. Set to 0 to disable all searches. A negative value means no global limit.
 MAX_UPGRADES=20
@@ -62,6 +68,9 @@ SONARR0_NUM_TO_UPGRADE=10
 # The maximum number of items allowed in the queue before skipping searches for this instance.
 # If the queue size is greater than or equal to this limit, the instance is skipped.
 # SONARR0_QUEUE_SIZE_LIMIT=100
+# Search mode: "episode" (default) or "season".
+# "season" mode groups upgradeable episodes by season and triggers a SeasonSearch.
+# SONARR0_SEARCH_MODE=season
 
 # --- Sonarr Instance 1 (Optional Example, e.g., Anime Sonarr) ---
 # SONARR1_URL="http://192.168.0.102:8989"

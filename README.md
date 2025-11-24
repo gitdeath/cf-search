@@ -22,6 +22,8 @@ The script is configured using environment variables. These can be placed in a `
 | Variable | Description | Default Value |
 | --- | --- | --- |
 | `TZ` | Sets the timezone for the container, affecting cron scheduling and log timestamps. | `America/Los_Angeles` |
+| `CRON_SCHEDULE` | Custom cron schedule (e.g., `0 2 * * *`). Takes precedence over `SEARCH_INTERVAL`. | `0 2 * * *` |
+| `SEARCH_INTERVAL` | Simplified schedule (e.g., `1m`, `3h`, `2d`). Used if `CRON_SCHEDULE` is not set. | (none) |
 | `MAX_UPGRADES` | The maximum total number of items to search for across ALL instances in a single run. Set to `0` to disable all searches. A negative value means no global limit. | `20` |
 | `DRY_RUN` | Enabled by default for safety. Set to `true` to run in simulation mode. Set to `false` to perform actual searches after verifying your configuration. | `true` |
 | `DEBUG_MODE` | Set to `true` to save detailed lists of all processed media and their upgrade eligibility to JSON files in the config directory. Useful for troubleshooting. | `false` |
@@ -35,6 +37,7 @@ The script is configured using environment variables. These can be placed in a `
 | `SONARR{n}_API_KEY` | API Key for the corresponding Sonarr instance. | (none) |
 | `SONARR{n}_NUM_CUTOFF_UNMET_TO_UPGRADE` | The max number of episodes to search for from THIS instance that have **not met their quality cutoff**. Set to `0` to disable this type of search. A negative number means no limit. | `0` |
 | `SONARR{n}_NUM_TO_UPGRADE` | The max number of episodes to search for from THIS instance based on **Custom Format score**. Set to `0` to disable this type of search. Leave unset or set to a negative number for no limit. | (unlimited) |
+| `SONARR{n}_SEARCH_MODE` | Search mode for this instance: `episode` (default) or `season`. In `season` mode, upgradeable episodes are grouped by season and a `SeasonSearch` is triggered. | `episode` |
 | `{SERVICE}{n}_QUEUE_SIZE_LIMIT` | The maximum number of items allowed in the queue before skipping searches for this instance. If the queue size is greater than or equal to this limit, the instance is skipped. | (disabled) |
 
 ## Setup Instructions
@@ -57,6 +60,8 @@ This method is recommended for keeping your API keys and other secrets out of yo
         restart: unless-stopped
         environment:
           - CRON_SCHEDULE=0 2 * * * # Run at 2 AM daily
+          # OR use SEARCH_INTERVAL for simplified scheduling:
+          # - SEARCH_INTERVAL=3h
           - TZ=America/Los_Angeles
         volumes:
           # Mount your config directory here. The script will create a .env file on first run.
@@ -101,6 +106,7 @@ You can also define all configuration variables directly in your `docker-compose
           - SONARR0_API_KEY=your_sonarr0_api_key_here
           - SONARR0_NUM_CUTOFF_UNMET_TO_UPGRADE=5 # Prioritize searching for up to 5 episodes that haven't met their quality cutoff
           - SONARR0_NUM_TO_UPGRADE=5 # Then, search for up to 5 episodes for CF score upgrades
+          - SONARR0_SEARCH_MODE=season # Optional: Use 'season' mode to trigger SeasonSearch instead of EpisodeSearch
         volumes:
           # A volume is still needed for persistent logging.
           - /path/to/your/config:/config

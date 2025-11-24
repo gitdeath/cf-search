@@ -11,10 +11,41 @@ else
   echo "INFO: Existing .env file found in /config."
 fi
 
+# Dump all environment variables to /etc/environment so cron can see them
+printenv | grep -v "no_proxy" >> /etc/environment
+
 # Set a default cron schedule if the CRON_SCHEDULE environment variable is not provided.
 if [ -z "$CRON_SCHEDULE" ]; then
-  echo "INFO: CRON_SCHEDULE environment variable not set, using default schedule of '0 2 * * *' (2 AM daily)."
-  CRON_SCHEDULE="0 2 * * *"  # Default to 2 AM daily if not set
+  if [ -n "$SEARCH_INTERVAL" ]; then
+    echo "INFO: CRON_SCHEDULE not set, parsing SEARCH_INTERVAL: '${SEARCH_INTERVAL}'"
+    # Extract the number and the unit (last character)
+    unit="${SEARCH_INTERVAL: -1}"
+    number="${SEARCH_INTERVAL%?}"
+
+    if [[ "$number" =~ ^[0-9]+$ ]]; then
+      case "$unit" in
+        m)
+          CRON_SCHEDULE="*/$number * * * *"
+          ;;
+        h)
+          CRON_SCHEDULE="0 */$number * * *"
+          ;;
+        d)
+          CRON_SCHEDULE="0 0 */$number * *"
+          ;;
+        *)
+          echo "WARNING: Invalid unit '$unit' in SEARCH_INTERVAL. Defaulting to '0 2 * * *'."
+          CRON_SCHEDULE="0 2 * * *"
+          ;;
+      esac
+    else
+      echo "WARNING: Invalid number '$number' in SEARCH_INTERVAL. Defaulting to '0 2 * * *'."
+      CRON_SCHEDULE="0 2 * * *"
+    fi
+  else
+    echo "INFO: Neither CRON_SCHEDULE nor SEARCH_INTERVAL set. Using default schedule of '0 2 * * *' (2 AM daily)."
+    CRON_SCHEDULE="0 2 * * *"
+  fi
 fi
 
 echo "INFO: Cron schedule set to '${CRON_SCHEDULE}'"

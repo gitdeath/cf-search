@@ -415,15 +415,18 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
                     "id": episode["id"],
                     "title": f"{title} (Reason: {upgrade_reason})",
                     "type": "episode",
+                    "seriesId": series["id"],
+                    "seasonNumber": episode["seasonNumber"]
                 })
             # Priority 2: Check for custom format score upgrades.
-            elif cutoff_score is not None and current_score < cutoff_score:
                 upgradeable = True
                 upgrade_reason = f"CF score {current_score} < cutoff {cutoff_score}"
                 cf_upgradeable_items.append({
                     "id": episode["id"],
                     "title": f"{title} (Reason: {upgrade_reason})",
                     "type": "episode",
+                    "seriesId": series["id"],
+                    "seasonNumber": episode["seasonNumber"]
                 })
 
             if debug_mode:
@@ -520,12 +523,19 @@ def load_configs(service_name):
                 logger.warning(f"Invalid QUEUE_SIZE_LIMIT '{queue_size_limit_str}' for {prefix}. Ignoring.")
                 queue_size_limit = None
 
+        # Load search mode (episode or season)
+        search_mode = os.getenv(f"{prefix}_SEARCH_MODE", "episode").lower()
+        if search_mode not in ["episode", "season"]:
+            logger.warning(f"Invalid SEARCH_MODE '{search_mode}' for {prefix}. Defaulting to 'episode'.")
+            search_mode = "episode"
+
         config = {
             "url": url,
             "api_key": api_key,
             "num_to_upgrade": instance_limit,
             "service_type": service_name.lower(),
-            "instance_name": prefix
+            "instance_name": prefix,
+            "search_mode": search_mode
         }
         config["num_cutoff_unmet_to_upgrade"] = instance_cutoff_limit
         config["queue_size_limit"] = queue_size_limit
@@ -575,10 +585,53 @@ def trigger_grouped_searches(items_to_search, search_history, dry_run=False):
             service.trigger_search("MoviesSearch", "movieIds", [m['id'] for m in items['movies']], dry_run)
 
         if items['episodes']:
-            logger.info(f"Queueing search for {len(items['episodes'])} episodes on {service.url}")
+            # Check search mode for this service
+            # We need to find the config for this service to check the search mode.
+            # Since we don't have the config object here, we can infer it or pass it.
+            # Better yet, let's assume the first item has the config or we pass it.
+            # Actually, 'items' is a list of dicts. We can attach the search mode to the item in main().
+            
+            # Group by search mode
+            episodes_by_mode = {'episode': [], 'season': []}
             for episode in items['episodes']:
-                logger.info(f"  - {episode['title']}")
-            service.trigger_search("EpisodeSearch", "episodeIds", [e['id'] for e in items['episodes']], dry_run)
+                mode = episode.get('search_mode', 'episode')
+                episodes_by_mode[mode].append(episode)
+
+            # Handle 'episode' mode searches
+            if episodes_by_mode['episode']:
+                logger.info(f"Queueing search for {len(episodes_by_mode['episode'])} episodes on {service.url} (Mode: Episode)")
+                for episode in episodes_by_mode['episode']:
+                    logger.info(f"  - {episode['title']}")
+                service.trigger_search("EpisodeSearch", "episodeIds", [e['id'] for e in episodes_by_mode['episode']], dry_run)
+
+            # Handle 'season' mode searches
+            if episodes_by_mode['season']:
+                # Group by series and season to minimize API calls
+                seasons_to_search = {}
+                for episode in episodes_by_mode['season']:
+                    key = (episode['seriesId'], episode['seasonNumber'])
+                    if key not in seasons_to_search:
+                        seasons_to_search[key] = []
+                    seasons_to_search[key].append(episode)
+                
+                logger.info(f"Queueing search for {len(seasons_to_search)} seasons on {service.url} (Mode: Season)")
+                for (series_id, season_number), episodes in seasons_to_search.items():
+                    logger.info(f"  - Series ID: {series_id}, Season: {season_number} (Triggered by {len(episodes)} episodes)")
+                    # For SeasonSearch, we need seriesId and seasonNumber
+                    # The payload structure for SeasonSearch is usually { "name": "SeasonSearch", "seriesId": X, "seasonNumber": Y }
+                    # We can't batch these easily into one call like EpisodeSearch, so we trigger one per season.
+                    
+                    payload = {
+                        "name": "SeasonSearch",
+                        "seriesId": series_id,
+                        "seasonNumber": season_number
+                    }
+                    
+                    if dry_run:
+                        logger.info(f"[DRY RUN] Would trigger SeasonSearch for Series {series_id} Season {season_number}")
+                    else:
+                        service._post("command", payload)
+                        logger.info(f"Triggered SeasonSearch for Series {series_id} Season {season_number}")
 
 def load_history(cooldown_seconds):
     """
@@ -636,6 +689,62 @@ def update_history(searched_items, search_history):
         # Create a unique key for each item based on its service type and ID.
         search_history[f"{item['service_type']}-{item['id']}"] = time.time()
 
+def update_cron_schedule():
+    """
+    Checks the current environment variables for CRON_SCHEDULE or SEARCH_INTERVAL
+    and updates the system cron job if the schedule has changed.
+    This allows users to update the schedule in .env without restarting the container.
+    """
+    cron_schedule = os.getenv("CRON_SCHEDULE")
+    search_interval = os.getenv("SEARCH_INTERVAL")
+    
+    final_schedule = "0 2 * * *" # Default
+
+    if cron_schedule:
+        final_schedule = cron_schedule
+        logger.debug(f"Using CRON_SCHEDULE: {final_schedule}")
+    elif search_interval:
+        logger.debug(f"Parsing SEARCH_INTERVAL: {search_interval}")
+        unit = search_interval[-1]
+        try:
+            number = int(search_interval[:-1])
+            if unit == 'm':
+                final_schedule = f"*/{number} * * * *"
+            elif unit == 'h':
+                final_schedule = f"0 */{number} * * *"
+            elif unit == 'd':
+                final_schedule = f"0 0 */{number} * *"
+            else:
+                logger.warning(f"Invalid unit '{unit}' in SEARCH_INTERVAL. Using default: {final_schedule}")
+        except ValueError:
+            logger.warning(f"Invalid number in SEARCH_INTERVAL '{search_interval}'. Using default: {final_schedule}")
+    else:
+        logger.debug(f"No schedule set. Using default: {final_schedule}")
+
+    cron_file_path = "/etc/cron.d/my-cron-job.actual"
+    expected_cron_line = f"{final_schedule} /usr/local/bin/python /app/app.py > /proc/1/fd/1 2>&1\n"
+
+    try:
+        current_content = ""
+        if os.path.exists(cron_file_path):
+            with open(cron_file_path, 'r') as f:
+                current_content = f.read()
+
+        if current_content != expected_cron_line:
+            logger.info(f"Cron schedule changed. Updating {cron_file_path}...")
+            logger.info(f"New schedule: {final_schedule}")
+            with open(cron_file_path, 'w') as f:
+                f.write(expected_cron_line)
+            
+            # Reload cron
+            os.system(f"crontab {cron_file_path}")
+            logger.info("Cron reloaded successfully.")
+        else:
+            logger.debug("Cron schedule is up to date.")
+
+    except Exception as e:
+        logger.error(f"Failed to update cron schedule: {e}")
+
 def main():
     """Main execution function."""
     logger.info("======================================================")
@@ -643,6 +752,12 @@ def main():
 
     # --- Configuration Loading ---
     # Load all settings from environment variables, providing sensible defaults.
+    # Reload .env file to pick up any changes
+    load_dotenv(dotenv_path="/config/.env", override=True)
+
+    # Check and update cron schedule if needed
+    update_cron_schedule()
+
     dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
     if dry_run:
         logger.info("DRY RUN is enabled. No actual search commands will be sent.")
@@ -726,6 +841,8 @@ def main():
         for item in items_to_search:
             item['service'] = service # service is guaranteed to be set if items_to_search is not empty
             item['service_type'] = config['service_type']
+            if config['service_type'] == 'sonarr':
+                item['search_mode'] = config.get('search_mode', 'episode')
 
         trigger_grouped_searches(items_to_search, search_history, dry_run=dry_run)
         
