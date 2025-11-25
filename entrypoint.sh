@@ -11,6 +11,15 @@ else
   echo "INFO: Existing .env file found in /config."
 fi
 
+# Load environment variables from .env file so they are available to this script
+if [ -f "/config/.env" ]; then
+  echo "INFO: Loading environment variables from /config/.env"
+  # Export variables automatically
+  set -a
+  source /config/.env
+  set +a
+fi
+
 # Dump all environment variables to /etc/environment so cron can see them
 printenv | grep -v "no_proxy" >> /etc/environment
 
