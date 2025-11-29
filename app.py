@@ -402,9 +402,17 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
                 continue
 
             history_key = f"sonarr-{episode['id']}"
+            season_history_key = f"sonarr-series-{series['id']}-season-{episode['seasonNumber']}"
+            
             last_searched_timestamp = search_history.get(history_key)
+            last_searched_season_timestamp = search_history.get(season_history_key)
+            
             if last_searched_timestamp and (time.time() - last_searched_timestamp) < cooldown_seconds:
                 logger.debug(f"Skipping recently searched episode: {title}")
+                continue
+            
+            if last_searched_season_timestamp and (time.time() - last_searched_season_timestamp) < cooldown_seconds:
+                logger.debug(f"Skipping episode in recently searched season: {title}")
                 continue
 
             # Priority 1: Check if the quality profile cutoff has not been met.
@@ -419,6 +427,7 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
                     "seasonNumber": episode["seasonNumber"]
                 })
             # Priority 2: Check for custom format score upgrades.
+            elif cutoff_score is not None and current_score < cutoff_score:
                 upgradeable = True
                 upgrade_reason = f"CF score {current_score} < cutoff {cutoff_score}"
                 cf_upgradeable_items.append({
@@ -488,8 +497,6 @@ def load_configs(service_name):
                 instance_limit = sys.maxsize
             else:
                 limit_val = int(num_to_upgrade_str)
-                if limit_val == 0:
-                    logger.info(f"NUM_TO_UPGRADE for {prefix} is 0. Custom Format score upgrades will be skipped for this instance.")
                 instance_limit = sys.maxsize if limit_val < 0 else limit_val
         except (ValueError, TypeError):
             logger.warning(f"Invalid NUM_TO_UPGRADE value '{num_to_upgrade_str}' for {prefix}. Treating as unlimited.")
@@ -503,8 +510,6 @@ def load_configs(service_name):
                 pass # Keep the default of 0
             else:
                 limit_val = int(num_cutoff_unmet_str)
-                if limit_val == 0:
-                    logger.info(f"NUM_CUTOFF_UNMET_TO_UPGRADE for {prefix} is 0. This type of upgrade will be skipped for this instance.")
                 instance_cutoff_limit = sys.maxsize if limit_val < 0 else limit_val
         except (ValueError, TypeError):
             logger.warning(f"Invalid NUM_CUTOFF_UNMET_TO_UPGRADE value '{num_cutoff_unmet_str}' for {prefix}. Treating as unlimited.")
@@ -688,6 +693,11 @@ def update_history(searched_items, search_history):
     for item in searched_items:
         # Create a unique key for each item based on its service type and ID.
         search_history[f"{item['service_type']}-{item['id']}"] = time.time()
+        
+        # If it's a season search, add a season-level history key
+        if item.get('service_type') == 'sonarr' and item.get('search_mode') == 'season':
+            season_key = f"sonarr-series-{item['seriesId']}-season-{item['seasonNumber']}"
+            search_history[season_key] = time.time()
 
 def update_cron_schedule():
     """
