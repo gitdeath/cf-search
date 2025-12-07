@@ -123,6 +123,10 @@ class ArrService:
                 if item.get("quality", {}).get("id") == cutoff_quality_id:
                     cutoff_quality_name = item["quality"]["name"]
                     break
+                # Check if the item is a Quality Group (e.g. "1080p" group)
+                if item.get("id") == cutoff_quality_id:
+                    cutoff_quality_name = item.get("name", "Unknown Group")
+                    break
             
             profile_details[profile["id"]] = {
                 "cutoffFormatScore": profile.get("cutoffFormatScore"),
@@ -424,6 +428,7 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
                     "title": f"{title} (Reason: {upgrade_reason})",
                     "type": "episode",
                     "seriesId": series["id"],
+                    "seriesTitle": series["title"],
                     "seasonNumber": episode["seasonNumber"]
                 })
             # Priority 2: Check for custom format score upgrades.
@@ -435,6 +440,7 @@ def get_sonarr_upgradeables(config, search_history, cooldown_seconds, debug_mode
                     "title": f"{title} (Reason: {upgrade_reason})",
                     "type": "episode",
                     "seriesId": series["id"],
+                    "seriesTitle": series["title"],
                     "seasonNumber": episode["seasonNumber"]
                 })
 
@@ -621,7 +627,8 @@ def trigger_grouped_searches(items_to_search, search_history, dry_run=False):
                 
                 logger.info(f"Queueing search for {len(seasons_to_search)} seasons on {service.url} (Mode: Season)")
                 for (series_id, season_number), episodes in seasons_to_search.items():
-                    logger.info(f"  - Series ID: {series_id}, Season: {season_number} (Triggered by {len(episodes)} episodes)")
+                    series_title = episodes[0].get('seriesTitle', 'Unknown Series')
+                    logger.info(f"  - Series: {series_title} (ID: {series_id}), Season: {season_number} (Triggered by {len(episodes)} episodes)")
                     # For SeasonSearch, we need seriesId and seasonNumber
                     # The payload structure for SeasonSearch is usually { "name": "SeasonSearch", "seriesId": X, "seasonNumber": Y }
                     # We can't batch these easily into one call like EpisodeSearch, so we trigger one per season.

@@ -131,5 +131,80 @@ class TestApp(unittest.TestCase):
             self.assertEqual(len(cutoff_unmet), 0, "Should be skipped due to season history")
             self.assertEqual(len(cf_upgradeable), 0, "Should be skipped due to season history")
 
+    def test_issue_7_quality_group_cutoff(self):
+        """
+        Test that get_quality_profile_details correctly identifies the cutoff quality name
+        when the cutoff ID refers to a Quality Group (item containing 'items') rather than
+        a direct quality definition.
+        """
+        with patch('app.ArrService') as MockArrService:
+            service = MockArrService.return_value
+            service.test_connection.return_value = True
+            
+            # Mock profile response structure matching the live Radarr instance
+            # Cutoff 1004 is a group "Movies 1080p"
+            service._get.return_value = [
+                {
+                    "id": 1,
+                    "name": "HD-1080p",
+                    "cutoff": 1004,
+                    "items": [
+                        # A direct quality item
+                        {
+                            "quality": {"id": 1, "name": "SDTV"},
+                            "items": [],
+                            "allowed": True
+                        },
+                        # A quality group item (ID 1004)
+                        {
+                            "id": 1004,
+                            "name": "Movies 1080p",
+                            "items": [
+                                {"quality": {"id": 3, "name": "WEBDL-1080p"}}
+                            ],
+                            "allowed": True
+                        }
+                    ]
+                }
+            ]
+            
+            # Call the method under test
+            # note: we need to instantiate ArrService properly or just call the method if it was static, 
+            # but it's an instance method. The mock returns the instance.
+            # We need to call the REAL get_quality_profile_details logic, but we mocked ArrService.
+            # So we should probably instantiate the real class but mock the _get method.
+            
+        # Re-mocking to allow calling the real method
+        with patch.object(ArrService, '_get') as mock_get:
+            mock_get.return_value = [
+                {
+                    "id": 1,
+                    "name": "HD-1080p",
+                    "cutoff": 1004,
+                    "cutoffFormatScore": 0,
+                    "items": [
+                        {
+                            "quality": {"id": 1, "name": "SDTV"},
+                            "items": [],
+                            "allowed": True
+                        },
+                        {
+                            "id": 1004,
+                            "name": "Movies 1080p",
+                            "items": [{"quality": {"id": 3, "name": "WEBDL-1080p"}}],
+                            "allowed": True
+                        }
+                    ]
+                }
+            ]
+            
+            service = ArrService("http://test", "apikey")
+            details = service.get_quality_profile_details()
+            
+            self.assertIn(1, details)
+            # This assertion is expected to FAIL before the fix
+            # Current code will likely return "N/A" or the wrong name
+            self.assertEqual(details[1]['cutoffQualityName'], "Movies 1080p")
+
 if __name__ == '__main__':
     unittest.main()
