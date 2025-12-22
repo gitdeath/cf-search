@@ -20,4 +20,4 @@ RUN chmod +x ./entrypoint.sh
 
 RUN mkdir /config
 
-ENTRYPOINT ["./entrypoint.sh"]
+ENTRYPOINT ["./entrypoint.sh"] 
